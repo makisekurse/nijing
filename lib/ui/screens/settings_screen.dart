@@ -261,6 +261,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
       mimeType: 'text/plain',
     );
     if (!mounted) return;
+    if (res.success && res.path != null) {
+      final ok = await FileExportService.shareFile(
+        filePath: res.path!,
+        title: '拟境 · 运行日志',
+        mimeType: 'text/plain',
+      );
+      if (!ok) {
+        await FileExportService.shareText(
+          title: '拟境 · 运行日志',
+          text: text,
+        );
+      }
+    }
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         duration: const Duration(seconds: 6),
@@ -271,10 +285,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         action: SnackBarAction(
           label: '系统分享',
-          onPressed: () => FileExportService.shareText(
-            title: '拟境 · 运行日志',
-            text: text,
-          ),
+          onPressed: () async {
+            if (res.success && res.path != null) {
+              final ok = await FileExportService.shareFile(
+                filePath: res.path!,
+                title: '拟境 · 运行日志',
+                mimeType: 'text/plain',
+              );
+              if (!ok) {
+                await FileExportService.shareText(
+                  title: '拟境 · 运行日志',
+                  text: text,
+                );
+              }
+            } else {
+              await FileExportService.shareText(
+                title: '拟境 · 运行日志',
+                text: text,
+              );
+            }
+          },
         ),
       ),
     );

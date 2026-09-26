@@ -196,7 +196,16 @@ class FallbackService {
     // ---- 二级兜底：提示切换通道 ----
     final err = lastError ??
         const AppError(AppErrorKind.unknown, '生成失败，原因未知。');
-    RuntimeLog.e('Fallback', '三级兜底触发：${err.kind.name} · ${err.message}');
+    RuntimeLog.e('Fallback', '兜底处理：${err.kind.name} · ${err.message}');
+
+    // 关键修复：参数/认证非法（400 Bad Request、401/403 密钥无效等）属于配置与端点校验失败，
+    // 必须直接以 failed 中止推演并保留原有备选分支，严禁插入虚假降级章节污染用户存档。
+    if (err.kind == AppErrorKind.auth) {
+      yield const GenEvent.restart();
+      yield GenEvent.failed(err.message);
+      return;
+    }
+
     // ---- 三级兜底：本地降级，保证不断流 ----
     yield const GenEvent.restart();
     yield GenEvent.notice(

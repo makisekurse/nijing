@@ -55,6 +55,10 @@ class GameSession {
   /// 生成过程中先清空可选行动，避免用户点到上一轮的。
   void clearChoices() => _choices = <String>[];
 
+  /// 恢复备选行动（用于网络报错/请求拒绝时保留用户当前的选项分支，防闪烁并支持就地重试）。
+  void restoreChoices(List<String> restored) =>
+      _choices = List<String>.from(restored);
+
   // ---------- 世界线管理 ----------
 
   /// 切换世界线。

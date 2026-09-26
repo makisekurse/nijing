@@ -189,4 +189,26 @@ class FileExportService {
     }
     return false;
   }
+
+  /// 调起系统原生文件分享面板（通过 FileProvider 发送真实物理文件附件，在微信/QQ/邮件等场景下不超限不卡死）
+  static Future<bool> shareFile({
+    required String filePath,
+    required String title,
+    String mimeType = 'text/plain',
+  }) async {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      try {
+        final ok = await _channel
+            .invokeMethod<bool>('shareFile', <String, dynamic>{
+          'filePath': filePath,
+          'title': title,
+          'mimeType': mimeType,
+        });
+        return ok ?? false;
+      } catch (e) {
+        debugPrint('FileExportService: shareFile failed: $e');
+      }
+    }
+    return false;
+  }
 }

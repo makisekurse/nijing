@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nijing/ui/screens/reader_screen.dart';
 import 'package:nijing/models/annotation.dart';
 import 'package:nijing/models/app_config.dart';
 import 'package:nijing/models/chapter_node.dart';
@@ -2139,6 +2141,290 @@ final x = 1;
       expect(lastThree[2].degraded, isTrue);
     });
   });
+
+  group('v1.3.5 · 400错误根治、日志真实文件分享与视口停泊', () {
+    test('Providers · 思考模式与参数隔离精确判定', () {
+      // 真正支持思考开关的推理模型
+      expect(Providers.supportsThinkingSwitch('qwen3.8-flash'), isTrue);
+      expect(Providers.supportsThinkingSwitch('Qwen3-Max'), isTrue);
+      expect(Providers.supportsThinkingSwitch('qwq-32b-preview'), isTrue);
+      // 普通模型绝不判定为支持思考开关
+      expect(Providers.supportsThinkingSwitch('qwen-plus'), isFalse);
+      expect(Providers.supportsThinkingSwitch('qwen-turbo'), isFalse);
+      expect(Providers.supportsThinkingSwitch('qwen-max'), isFalse);
+      expect(Providers.supportsThinkingSwitch('deepseek-chat'), isFalse);
+
+      // supportsThinkingParameter 严格服务商隔离与拼写自愈
+      expect(
+        Providers.supportsThinkingParameter(apiProvider: 'bailian', modelName: 'qwen3.8-flash'),
+        isTrue,
+      );
+      expect(
+        Providers.supportsThinkingParameter(apiProvider: 'bailian', modelName: 'qwen3.8flash'),
+        isTrue,
+      );
+      expect(
+        Providers.supportsThinkingParameter(apiProvider: 'bailian', modelName: 'qwen-plus'),
+        isFalse,
+      );
+      expect(
+        Providers.supportsThinkingParameter(apiProvider: 'custom', modelName: 'qwen3.8-flash'),
+        isFalse,
+      );
+      expect(
+        Providers.supportsThinkingParameter(apiProvider: 'deepseek', modelName: 'deepseek-chat'),
+        isFalse,
+      );
+    });
+
+    test('Providers.normalizeModelName · 模型代码智能归一化自愈', () {
+      expect(Providers.normalizeModelName('qwen3.8flash'), 'qwen3.8-flash');
+      expect(Providers.normalizeModelName('Qwen3.8Flash'), 'qwen3.8-flash');
+      expect(Providers.normalizeModelName('Qwen3.8-Flash'), 'qwen3.8-flash');
+      expect(Providers.normalizeModelName('qwen-3.8-flash'), 'qwen3.8-flash');
+      expect(Providers.normalizeModelName('qwen_3.8_flash'), 'qwen3.8-flash');
+      expect(Providers.normalizeModelName('qwen3.8max'), 'qwen3.8-max');
+      expect(Providers.normalizeModelName('Qwen3.8-Max'), 'qwen3.8-max');
+      expect(Providers.normalizeModelName('qwen3.7flash'), 'qwen3.7-flash');
+      expect(Providers.normalizeModelName('qwen3.7plus'), 'qwen3.7-plus');
+      expect(Providers.normalizeModelName('qwenplus'), 'qwen-plus');
+      expect(Providers.normalizeModelName('Qwen-Plus'), 'qwen-plus');
+      expect(Providers.normalizeModelName('qwen_plus'), 'qwen-plus');
+      expect(Providers.normalizeModelName('qwenturbo'), 'qwen-turbo');
+      expect(Providers.normalizeModelName('qwen_turbo'), 'qwen-turbo');
+      expect(Providers.normalizeModelName('qwenmax'), 'qwen-max');
+      expect(Providers.normalizeModelName('deepseekchat'), 'deepseek-chat');
+      expect(Providers.normalizeModelName('DeepSeek-Chat'), 'deepseek-chat');
+      expect(Providers.normalizeModelName('deepseekreasoner'), 'deepseek-reasoner');
+      expect(Providers.normalizeModelName('qwq32b'), 'qwq-32b-preview');
+      expect(Providers.normalizeModelName('qwq-32b-preview'), 'qwq-32b-preview');
+    });
+
+    test('LlmClient.calculateMaxTokens · 模型硬限与安全上限', () {
+      // 阿里云百炼 qwen-turbo 硬限 [1, 1500]
+      expect(LlmClient.calculateMaxTokens(3000, modelName: 'qwen-turbo'), 1500);
+      expect(LlmClient.calculateMaxTokens(3000, modelName: 'qwenturbo'), 1500);
+
+      // 阿里云百炼 qwen-plus & qwen-max 硬限 [1, 2000]
+      expect(LlmClient.calculateMaxTokens(3000, modelName: 'qwen-plus'), 2000);
+      expect(LlmClient.calculateMaxTokens(3000, modelName: 'qwenplus'), 2000);
+      expect(LlmClient.calculateMaxTokens(3000, modelName: 'qwen-max'), 2000);
+      expect(LlmClient.calculateMaxTokens(3000, modelName: 'qwenmax'), 2000);
+      expect(LlmClient.calculateMaxTokens(800, modelName: 'qwen-plus'), 2000);
+      expect(LlmClient.calculateMaxTokens(300, modelName: 'qwen-plus'), 900);
+
+      // DeepSeek 4096 上限
+      expect(LlmClient.calculateMaxTokens(3000, provider: 'deepseek'), 4096);
+      expect(LlmClient.calculateMaxTokens(3000, modelName: 'deepseek-chat'), 4096);
+
+      // 普通推理模型支持充足缓冲
+      expect(LlmClient.calculateMaxTokens(3000, modelName: 'qwen3.8-flash'), 9000);
+      expect(LlmClient.calculateMaxTokens(3000, modelName: 'qwen3.8flash'), 9000);
+      expect(LlmClient.calculateMaxTokens(3000), 9000);
+    });
+
+    test('AppError.fromStatus · 400 服务端具体错误透出', () {
+      // 百炼 InvalidParameter 报错透出
+      const bailianErr = '{"code":"InvalidParameter","message":"Range of max_tokens should be [1, 2000]","request_id":"req-123"}';
+      final err1 = AppError.fromStatus(400, bailianErr);
+      expect(err1.message, contains('Range of max_tokens should be [1, 2000]'));
+      expect(err1.statusCode, 400);
+
+      // OpenAI/兼容端点 error.message 透出
+      const dashscopeErr = '{"error":{"message":"Model does not support enable_thinking","type":"invalid_request_error"}}';
+      final err2 = AppError.fromStatus(400, dashscopeErr);
+      expect(err2.message, contains('Model does not support enable_thinking'));
+
+      // 非 JSON / 纯文本 400 兜底
+      final err3 = AppError.fromStatus(400, 'Bad Request');
+      expect(err3.message, contains('多为模型名不存在、单幕字数超限或参数不合法'));
+    });
+
+    test('FileExportService · shareFile 原生调用安全不崩溃', () async {
+      final res = await FileExportService.shareFile(
+        filePath: '/tmp/non_existent.txt',
+        title: '测试文件分享',
+      );
+      // 非 Android 宿主下安全回落为 false，不抛未捕获异常
+      expect(res, isFalse);
+    });
+
+    test('GameSession · restoreChoices 恢复备选分支', () {
+      final slot = SaveSlot(
+        id: 'slot_choices_test',
+        title: '测试存档',
+        worldBook: WorldBook(
+          id: 'wb1',
+          name: '测试世界',
+          era: '1900',
+          worldview: '背景',
+          playerRole: '主角',
+        ),
+      );
+      final session = GameSession(slot);
+      session.restoreChoices(<String>['分支甲', '分支乙']);
+      expect(session.choices, contains('分支甲'));
+
+      session.clearChoices();
+      expect(session.choices, isEmpty);
+
+      session.restoreChoices(<String>['分支甲', '分支乙']);
+      expect(session.choices.length, 2);
+      expect(session.choices[0], '分支甲');
+      expect(session.choices[1], '分支乙');
+    });
+
+    test('GenerationController · 错误与中止时备选选项保留防闪烁与就地重试', () async {
+      final slot = SaveSlot(
+        id: 'slot_preserve_choices',
+        title: '测试存档',
+        worldBook: WorldBook(
+          id: 'wb1',
+          name: '测试世界',
+          era: '1900',
+          worldview: '背景',
+          playerRole: '主角',
+        ),
+      );
+      final session = GameSession(slot);
+      session.restoreChoices(<String>['选项A', '选项B']);
+
+      final c = GenerationController.forSlot('slot_preserve_choices');
+
+      // 验证推演刚发起、首批 token 尚未到达前，choices 不会被提前清空
+      final future = c.startGeneration(
+        session: session,
+        config: AppConfig(),
+        apiKey: '',
+        action: '选项A',
+        book: slot.worldBook,
+      );
+      // 正在握手期间选项保持保留
+      expect(session.choices, contains('选项A'));
+
+      // 中止或异常失败后，选项完整保留供重试
+      c.cancel();
+      await future;
+
+      expect(session.choices, contains('选项A'));
+      expect(session.choices, contains('选项B'));
+    });
+
+    test('FallbackService · 400/401 认证与参数错误直接 failed 阻断，不产生虚假降级章节', () async {
+      final mock = _Mock400AuthFailClient();
+      final fb = FallbackService(mock);
+      final events = await fb.generate(
+        config: AppConfig(),
+        apiKey: 'dummy-key',
+        book: WorldBook(
+          id: 'test_book',
+          name: '测试世界',
+          era: '1900',
+          worldview: '背景',
+          playerRole: '主角',
+        ),
+        history: const <ChapterNode>[],
+        playerAction: '拔剑迎战',
+      ).toList();
+
+      expect(events, isNotEmpty);
+      // 验证未产生 done 事件（未落库伪降级章节）
+      expect(events.any((e) => e.kind == GenEventKind.done), isFalse);
+      // 验证产生 failed 且携带具体 400 错误说明
+      final failedEvent = events.firstWhere((e) => e.kind == GenEventKind.failed);
+      expect(failedEvent.text, contains('Range of max_tokens should be [1, 2000]'));
+    });
+
+    testWidgets('ReaderScreen 渲染正常且支持视口停泊检测与回到最新行按钮', (tester) async {
+      final slot = SaveSlot(
+        id: 'slot_reader_test',
+        title: '测试存档',
+        worldBook: WorldBook(
+          id: 'wb1',
+          name: '测试世界书',
+          era: '1900',
+          worldview: '背景描述',
+          playerRole: '主角人物',
+        ),
+        lines: <WorldLine>[
+          WorldLine(
+            id: 'line_test',
+            name: '主线',
+            history: <ChapterNode>[
+              for (int i = 1; i <= 6; i++)
+                ChapterNode(
+                  chapterIndex: i,
+                  title: '第 $i 幕',
+                  content: '长夜漫漫，风雪如刀。天地苍茫，万籁寂静。' * 10,
+                  date: '1900年冬',
+                  choices: i == 6 ? <String>['开局选项一', '开局选项二'] : <String>[],
+                ),
+            ],
+          ),
+        ],
+      );
+
+      tester.view.physicalSize = const Size(800, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ReaderScreen(
+            config: AppConfig(),
+            slot: slot,
+            onConfigChanged: (_) {},
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('测试世界书'), findsWidgets);
+      expect(find.text('开局选项一'), findsOneWidget);
+      expect(find.text('开局选项二'), findsOneWidget);
+
+      // 初始状态下在底部，回到最新行按钮处于隐蔽状态
+      final btnFinder = find.byKey(const ValueKey('back_to_latest_button'));
+      expect(btnFinder, findsOneWidget);
+      final opacityWidget = tester.widget<AnimatedOpacity>(
+        find.ancestor(of: btnFinder, matching: find.byType(AnimatedOpacity)),
+      );
+      expect(opacityWidget.opacity, 0.0);
+
+      // 模拟流式生成涌入且视口手动向上滚动远离底部
+      final controller = GenerationController.forSlot('slot_reader_test');
+      controller.status = GenerationStatus.generating;
+      controller.live = '风雪之中，隐约传来马蹄声……\n\n黑夜更深了。';
+      controller.notifyListeners();
+      await tester.pump();
+
+      // 向上拖动内容（视口向上停泊回看）
+      await tester.drag(find.byType(ListView), const Offset(0, 500));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final opacityWidgetVisible = tester.widget<AnimatedOpacity>(
+        find.ancestor(of: btnFinder, matching: find.byType(AnimatedOpacity)),
+      );
+      expect(opacityWidgetVisible.opacity, 1.0);
+
+      // 点击“有新内容流出”浮动按钮，平滑滚回最新行
+      await tester.tap(btnFinder);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      final opacityWidgetAfter = tester.widget<AnimatedOpacity>(
+        find.ancestor(of: btnFinder, matching: find.byType(AnimatedOpacity)),
+      );
+      expect(opacityWidgetAfter.opacity, 0.0);
+
+      controller.reset();
+      await tester.pump(const Duration(milliseconds: 100));
+    });
+  });
 }
 
 class _MockAlwaysFailClient extends LlmClient {
@@ -2150,6 +2436,21 @@ class _MockAlwaysFailClient extends LlmClient {
     String workspaceId = '',
   }) async* {
     throw const AppError(AppErrorKind.refused, '模型回避了这一段的推演。');
+  }
+}
+
+class _Mock400AuthFailClient extends LlmClient {
+  @override
+  Stream<String> streamChat({
+    required AppConfig config,
+    required String apiKey,
+    required List<Map<String, String>> messages,
+    String workspaceId = '',
+  }) async* {
+    throw AppError.fromStatus(
+      400,
+      '{"code":"InvalidParameter","message":"Range of max_tokens should be [1, 2000]"}',
+    );
   }
 }
 

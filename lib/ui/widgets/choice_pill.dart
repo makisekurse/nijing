@@ -28,13 +28,16 @@ class ChoicePill extends StatelessWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
           onTap: enabled ? onTap : null,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-            decoration: BoxDecoration(
-              color: theme.cardColor,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: theme.dividerColor),
-            ),
+          child: AnimatedOpacity(
+            duration: const Duration(milliseconds: 180),
+            opacity: enabled ? 1.0 : 0.65,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+              decoration: BoxDecoration(
+                color: theme.cardColor,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: theme.dividerColor),
+              ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
@@ -71,6 +74,7 @@ class ChoicePill extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 }

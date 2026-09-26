@@ -1,11 +1,14 @@
 package io.github.makisekurse.nijing
 
+import android.content.ClipData
 import android.content.ContentValues
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.view.WindowManager
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -61,6 +64,87 @@ class MainActivity : FlutterActivity() {
                             putExtra(Intent.EXTRA_TEXT, shareContent)
                         }
                         val chooser = Intent.createChooser(intent, title)
+                        startActivity(chooser)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("SHARE_FAILED", e.message, null)
+                    }
+                }
+                "shareFile" -> {
+                    val filePath = call.argument<String>("filePath")
+                    val title = call.argument<String>("title") ?: "分享文件"
+                    val mimeType = call.argument<String>("mimeType") ?: "text/plain"
+                    if (filePath.isNullOrEmpty()) {
+                        result.error("INVALID_PATH", "File path cannot be null or empty", null)
+                        return@setMethodCallHandler
+                    }
+                    try {
+                        val file = File(filePath)
+                        val contentUri: Uri = if (file.exists()) {
+                            FileProvider.getUriForFile(
+                                this@MainActivity,
+                                "${applicationContext.packageName}.fileprovider",
+                                file
+                            )
+                        } else {
+                            var targetFile: File? = null
+                            val extFile = File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), file.name)
+                            if (extFile.exists()) {
+                                targetFile = extFile
+                            } else {
+                                val cacheFile = File(cacheDir, file.name)
+                                if (cacheFile.exists()) {
+                                    targetFile = cacheFile
+                                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                    val projection = arrayOf(MediaStore.MediaColumns._ID)
+                                    val selection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ?"
+                                    val selectionArgs = arrayOf(file.name)
+                                    var foundMediaUri: Uri? = null
+                                    contentResolver.query(
+                                        MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                                        projection,
+                                        selection,
+                                        selectionArgs,
+                                        null
+                                    )?.use { cursor ->
+                                        if (cursor.moveToFirst()) {
+                                            val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID))
+                                            foundMediaUri = android.content.ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id)
+                                        }
+                                    }
+                                    if (foundMediaUri != null) {
+                                        contentResolver.openInputStream(foundMediaUri!!)?.use { ins ->
+                                            FileOutputStream(cacheFile).use { fos ->
+                                                ins.copyTo(fos)
+                                            }
+                                        }
+                                        if (cacheFile.exists()) {
+                                            targetFile = cacheFile
+                                        }
+                                    }
+                                }
+                            }
+                            if (targetFile != null && targetFile.exists()) {
+                                FileProvider.getUriForFile(
+                                    this@MainActivity,
+                                    "${applicationContext.packageName}.fileprovider",
+                                    targetFile
+                                )
+                            } else {
+                                throw java.io.FileNotFoundException("File not found at $filePath")
+                            }
+                        }
+
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            this.type = mimeType
+                            putExtra(Intent.EXTRA_SUBJECT, title)
+                            putExtra(Intent.EXTRA_STREAM, contentUri)
+                            clipData = ClipData.newRawUri(title, contentUri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        val chooser = Intent.createChooser(intent, title).apply {
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
                         startActivity(chooser)
                         result.success(true)
                     } catch (e: Exception) {

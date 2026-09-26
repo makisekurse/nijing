@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 /// 统一错误分类。
 ///
 /// 旧版本在 `catch (e)` 里把异常整个吞掉，只给两句通用选项，
@@ -82,9 +84,32 @@ class AppError implements Exception {
       );
     }
     if (statusCode == 400) {
+      String extraMsg = '';
+      try {
+        final decoded = jsonDecode(body);
+        if (decoded is Map) {
+          if (decoded['error'] is Map && decoded['error']['message'] != null) {
+            extraMsg = decoded['error']['message'].toString();
+          } else if (decoded['message'] != null) {
+            extraMsg = decoded['message'].toString();
+          } else if (decoded['msg'] != null) {
+            extraMsg = decoded['msg'].toString();
+          } else if (decoded['detail'] != null) {
+            extraMsg = decoded['detail'].toString();
+          } else if (decoded['error'] is String) {
+            extraMsg = decoded['error'].toString();
+          }
+        }
+      } catch (_) {}
+
+      final cleanExtra = extraMsg.trim();
+      final msg = cleanExtra.isNotEmpty
+          ? '请求被拒绝（400）：$cleanExtra'
+          : '请求被拒绝（400）：多为模型名不存在、单幕字数超限或参数不合法，请核对配置。';
+
       return AppError(
         AppErrorKind.auth,
-        '请求被拒绝（400）：多为模型名不存在或参数不合法，请核对「模型代码」。',
+        msg,
         detail: 'HTTP 400 · $brief',
         statusCode: statusCode,
       );

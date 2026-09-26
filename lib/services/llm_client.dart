@@ -72,8 +72,36 @@ class LlmClient {
     }
   }
 
-  /// 根据单幕目标字数计算具备充足缓冲的 max_tokens（按字数约 3 倍比例配置，保底 2048，上限 16384）。
-  static int calculateMaxTokens(int maxWords) => (maxWords * 3).clamp(2048, 16384);
+  /// 根据单幕目标字数计算具备充足缓冲的 max_tokens。
+  ///
+  /// - 针对特定硬限模型（如百炼 `qwen-plus` 官方硬限 [1, 2000]），严格将安全上限截断在 2000；
+  /// - 针对 DeepSeek 官方端点常见上限 4096；
+  /// - 默认按字数约 3 倍比例配置，保底 2048，上限 16384。
+  static int calculateMaxTokens(
+    int maxWords, {
+    String? modelName,
+    String? provider,
+  }) {
+    final normalized = Providers.normalizeModelName(modelName ?? '');
+    final model = normalized.toLowerCase().trim();
+    // 阿里云百炼普通模型官方规定严格的 max_tokens 区间：
+    // qwen-turbo: [1, 1500]
+    // qwen-plus, qwen-max: [1, 2000]
+    if (model == 'qwen-turbo' || model.startsWith('qwen-turbo')) {
+      return (maxWords * 3).clamp(1, 1500);
+    }
+    if (model == 'qwen-plus' ||
+        model.startsWith('qwen-plus') ||
+        model == 'qwen-max' ||
+        model.startsWith('qwen-max')) {
+      return (maxWords * 3).clamp(1, 2000);
+    }
+    // DeepSeek 官方 API 补全上限为 4096
+    if (provider == 'deepseek' || model.startsWith('deepseek')) {
+      return (maxWords * 3).clamp(1024, 4096);
+    }
+    return (maxWords * 3).clamp(2048, 16384);
+  }
 
   Stream<String> _singleRequest({
     required AppConfig config,
@@ -82,22 +110,34 @@ class LlmClient {
     required String workspaceId,
   }) async* {
     final url = Providers.chatCompletionsUrl(config, workspaceId: workspaceId);
+    final rawModel = config.modelName.trim().isEmpty
+        ? Providers.byId(config.apiProvider).defaultModel
+        : config.modelName.trim();
+    final model = Providers.normalizeModelName(rawModel);
 
     final body = <String, dynamic>{
-      'model': config.modelName.trim().isEmpty
-          ? Providers.byId(config.apiProvider).defaultModel
-          : config.modelName.trim(),
+      'model': model,
       'messages': messages,
       'stream': true,
       'temperature': config.temperature,
-      'max_tokens': calculateMaxTokens(config.maxWords),
+      'max_tokens': calculateMaxTokens(
+        config.maxWords,
+        modelName: model,
+        provider: config.apiProvider,
+      ),
     };
-    // 思考模式控制：根据用户配置动态注入。
-    // 阿里云百炼/Qwen 系列及多数 OpenAI 兼容推理服务均支持 enable_thinking 参数。
-    if (config.enableThinking) {
-      body['enable_thinking'] = true;
-    } else if (Providers.supportsThinkingSwitch(config.modelName)) {
-      body['enable_thinking'] = false;
+    // 思考模式控制：严格按服务商与特定模型隔离注入。
+    // 仅在百炼且属于真正支持思考参数的推理模型（如 qwen3.8 系列/qwq）上注入；
+    // 自定义端点、DeepSeek 及普通模型（如 qwen-plus）绝不注入非法字段，防止 400 报错。
+    if (Providers.supportsThinkingParameter(
+      apiProvider: config.apiProvider,
+      modelName: model,
+    )) {
+      if (config.enableThinking) {
+        body['enable_thinking'] = true;
+      } else {
+        body['enable_thinking'] = false;
+      }
     }
 
     RuntimeLog.i(
@@ -252,17 +292,22 @@ class LlmClient {
     if (apiKey.trim().isEmpty) return '还没有填 API Key。';
 
     final url = Providers.chatCompletionsUrl(config, workspaceId: workspaceId);
+    final rawModel = config.modelName.trim().isEmpty
+        ? Providers.byId(config.apiProvider).defaultModel
+        : config.modelName.trim();
+    final model = Providers.normalizeModelName(rawModel);
     final body = <String, dynamic>{
-      'model': config.modelName.trim().isEmpty
-          ? Providers.byId(config.apiProvider).defaultModel
-          : config.modelName.trim(),
+      'model': model,
       'messages': <Map<String, String>>[
         <String, String>{'role': 'user', 'content': '回复两个字：就绪'},
       ],
       'stream': false,
       'max_tokens': 16,
     };
-    if (Providers.supportsThinkingSwitch(config.modelName)) {
+    if (Providers.supportsThinkingParameter(
+      apiProvider: config.apiProvider,
+      modelName: model,
+    )) {
       body['enable_thinking'] = false;
     }
 
@@ -302,16 +347,33 @@ class LlmClient {
     int maxTokens = 2400,
   }) async {
     final url = Providers.chatCompletionsUrl(config, workspaceId: workspaceId);
+    final rawModel = config.modelName.trim().isEmpty
+        ? Providers.byId(config.apiProvider).defaultModel
+        : config.modelName.trim();
+    final model = Providers.normalizeModelName(rawModel);
+    int safeMaxTokens = maxTokens;
+    if (model == 'qwen-turbo' || model.startsWith('qwen-turbo')) {
+      safeMaxTokens = maxTokens.clamp(1, 1500);
+    } else if (model == 'qwen-plus' ||
+        model.startsWith('qwen-plus') ||
+        model == 'qwen-max' ||
+        model.startsWith('qwen-max')) {
+      safeMaxTokens = maxTokens.clamp(1, 2000);
+    } else if (config.apiProvider == 'deepseek' || model.startsWith('deepseek')) {
+      safeMaxTokens = maxTokens.clamp(1, 4096);
+    }
+
     final body = <String, dynamic>{
-      'model': config.modelName.trim().isEmpty
-          ? Providers.byId(config.apiProvider).defaultModel
-          : config.modelName.trim(),
+      'model': model,
       'messages': messages,
       'stream': false,
       'temperature': 0.6,
-      'max_tokens': maxTokens,
+      'max_tokens': safeMaxTokens,
     };
-    if (Providers.supportsThinkingSwitch(config.modelName)) {
+    if (Providers.supportsThinkingParameter(
+      apiProvider: config.apiProvider,
+      modelName: model,
+    )) {
       body['enable_thinking'] = false;
     }
 

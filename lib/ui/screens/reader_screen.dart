@@ -135,6 +135,8 @@ class _ReaderScreenState extends State<ReaderScreen>
 
   void _onControllerUpdate() {
     if (!mounted) return;
+    final wasBusy = _busy;
+    final prevLiveLength = _live.length;
     setState(() {
       _busy = _controller.isBusy;
       _pendingAction = _controller.pendingAction;
@@ -142,6 +144,9 @@ class _ReaderScreenState extends State<ReaderScreen>
       _notice = _controller.notice;
       _noticeSticky = _controller.noticeSticky;
       _degraded = _controller.degraded;
+      if (!_atBottom && (_busy || wasBusy) && _live.length > prevLiveLength) {
+        _hasNewStreamingContent = true;
+      }
     });
     _follow();
   }
@@ -227,15 +232,18 @@ class _ReaderScreenState extends State<ReaderScreen>
   /// 跳到最新一幕。切换世界线后也走这里。
   void _jumpToLatest() {
     if (_history.isEmpty) return;
+    _hasNewStreamingContent = false;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ctx = _chapterKeyFor(_history.length - 1).currentContext;
       if (ctx != null) {
         _atBottom = true;
+        _hasNewStreamingContent = false;
         Scrollable.ensureVisible(ctx, duration: Duration.zero, alignment: 1);
       }
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || !_scroll.hasClients) return;
         _atBottom = true;
+        _hasNewStreamingContent = false;
         _scroll.jumpTo(_scroll.position.maxScrollExtent);
       });
     });
@@ -244,6 +252,7 @@ class _ReaderScreenState extends State<ReaderScreen>
   /// 精准平滑跳转定位到指定幕。
   void _jumpToChapter(int index) {
     if (index < 0 || index >= _history.length) return;
+    _hasNewStreamingContent = false;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final ctx = _chapterKeyFor(index).currentContext;
@@ -313,12 +322,21 @@ class _ReaderScreenState extends State<ReaderScreen>
   // 现在只有「已经在底部附近」时才跟随。
 
   bool _atBottom = true;
+  bool _hasNewStreamingContent = false;
 
   void _onScroll() {
     if (!_scroll.hasClients) return;
     final max = _scroll.position.maxScrollExtent;
     final cur = _scroll.position.pixels;
-    _atBottom = (max - cur) < 120;
+    final isBottom = (max - cur) < 120;
+    if (isBottom != _atBottom) {
+      setState(() {
+        _atBottom = isBottom;
+        if (isBottom) {
+          _hasNewStreamingContent = false;
+        }
+      });
+    }
   }
 
   void _follow() {
@@ -329,6 +347,21 @@ class _ReaderScreenState extends State<ReaderScreen>
         _scroll.position.maxScrollExtent,
         duration: const Duration(milliseconds: 180),
         curve: Curves.easeOut,
+      );
+    });
+  }
+
+  void _scrollToBottomAndFollow() {
+    setState(() {
+      _atBottom = true;
+      _hasNewStreamingContent = false;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scroll.hasClients) return;
+      _scroll.animateTo(
+        _scroll.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
       );
     });
   }
@@ -568,26 +601,7 @@ class _ReaderScreenState extends State<ReaderScreen>
                               child: Column(
                                 mainAxisSize: MainAxisSize.min,
                                 children: <Widget>[
-                                  if (!_busy) ...<Widget>[
-                                    if (_history.isEmpty && _choices.isEmpty)
-                                      Padding(
-                                        padding: const EdgeInsets.only(bottom: 12),
-                                        child: SizedBox(
-                                          width: double.infinity,
-                                          child: FilledButton.icon(
-                                            onPressed: () => _act(''),
-                                            icon: const Icon(Icons.auto_stories_rounded,
-                                                size: 18),
-                                            label: const Text('开始推演'),
-                                            style: FilledButton.styleFrom(
-                                              backgroundColor:
-                                                  theme.colorScheme.primary,
-                                              padding: const EdgeInsets.symmetric(
-                                                  vertical: 14),
-                                            ),
-                                          ),
-                                        ),
-                                      ),
+                                  if (_choices.isNotEmpty && (_live.isEmpty || !_busy)) ...<Widget>[
                                     for (var i = 0; i < _choices.length; i++)
                                       ChoicePill(
                                         index: i + 1,
@@ -596,29 +610,37 @@ class _ReaderScreenState extends State<ReaderScreen>
                                         onTap: () => _act(_choices[i]),
                                       ),
                                     const SizedBox(height: 6),
-                                    FreeInputBar(
-                                      busy: false,
-                                      controller: _inputController,
-                                      focusNode: _inputFocusNode,
-                                      godMode: _godMode,
-                                      onToggleGodMode: (v) =>
-                                          setState(() => _godMode = v),
-                                      onSend: (text) =>
-                                          _act(text, godMode: _godMode),
-                                      onCancel: _cancel,
+                                  ] else if (!_busy && _history.isEmpty && _choices.isEmpty) ...<Widget>[
+                                    Padding(
+                                      padding: const EdgeInsets.only(bottom: 12),
+                                      child: SizedBox(
+                                        width: double.infinity,
+                                        child: FilledButton.icon(
+                                          onPressed: () => _act(''),
+                                          icon: const Icon(Icons.auto_stories_rounded,
+                                              size: 18),
+                                          label: const Text('开始推演'),
+                                          style: FilledButton.styleFrom(
+                                            backgroundColor:
+                                                theme.colorScheme.primary,
+                                            padding: const EdgeInsets.symmetric(
+                                                vertical: 14),
+                                          ),
+                                        ),
+                                      ),
                                     ),
-                                  ] else
-                                    FreeInputBar(
-                                      busy: true,
-                                      controller: _inputController,
-                                      focusNode: _inputFocusNode,
-                                      godMode: _godMode,
-                                      onToggleGodMode: (v) =>
-                                          setState(() => _godMode = v),
-                                      onSend: (text) =>
-                                          _act(text, godMode: _godMode),
-                                      onCancel: _cancel,
-                                    ),
+                                  ],
+                                  FreeInputBar(
+                                    busy: _busy,
+                                    controller: _inputController,
+                                    focusNode: _inputFocusNode,
+                                    godMode: _godMode,
+                                    onToggleGodMode: (v) =>
+                                        setState(() => _godMode = v),
+                                    onSend: (text) =>
+                                        _act(text, godMode: _godMode),
+                                    onCancel: _cancel,
+                                  ),
                                 ],
                               ),
                             ),
@@ -632,6 +654,7 @@ class _ReaderScreenState extends State<ReaderScreen>
               ],
             ),
             _header(theme),
+            _buildBackToLatestButton(theme),
           ],
         ),
       ),
@@ -1140,10 +1163,26 @@ class _ReaderScreenState extends State<ReaderScreen>
         ),
         action: SnackBarAction(
           label: '系统分享',
-          onPressed: () => FileExportService.shareText(
-            title: '${_slot.worldBook.name} · 推演故事',
-            text: content,
-          ),
+          onPressed: () async {
+            if (res.success && res.path != null) {
+              final ok = await FileExportService.shareFile(
+                filePath: res.path!,
+                title: '${_slot.worldBook.name} · 推演故事',
+                mimeType: mimeType,
+              );
+              if (!ok) {
+                await FileExportService.shareText(
+                  title: '${_slot.worldBook.name} · 推演故事',
+                  text: content,
+                );
+              }
+            } else {
+              await FileExportService.shareText(
+                title: '${_slot.worldBook.name} · 推演故事',
+                text: content,
+              );
+            }
+          },
         ),
       ),
     );
@@ -1755,6 +1794,20 @@ class _ReaderScreenState extends State<ReaderScreen>
       RuntimeLog.i('App', '运行日志已导出：${res.path}');
     }
     if (!mounted) return;
+    if (res.success && res.path != null) {
+      final ok = await FileExportService.shareFile(
+        filePath: res.path!,
+        title: '拟境 · 运行日志',
+        mimeType: 'text/plain',
+      );
+      if (!ok) {
+        await FileExportService.shareText(
+          title: '拟境 · 运行日志',
+          text: text,
+        );
+      }
+    }
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         duration: const Duration(seconds: 6),
@@ -1765,9 +1818,96 @@ class _ReaderScreenState extends State<ReaderScreen>
         ),
         action: SnackBarAction(
           label: '系统分享',
-          onPressed: () => FileExportService.shareText(
-            title: '拟境 · 运行日志',
-            text: text,
+          onPressed: () async {
+            if (res.success && res.path != null) {
+              final ok = await FileExportService.shareFile(
+                filePath: res.path!,
+                title: '拟境 · 运行日志',
+                mimeType: 'text/plain',
+              );
+              if (!ok) {
+                await FileExportService.shareText(
+                  title: '拟境 · 运行日志',
+                  text: text,
+                );
+              }
+            } else {
+              await FileExportService.shareText(
+                title: '拟境 · 运行日志',
+                text: text,
+              );
+            }
+          },
+        ),
+      ),
+    );
+  }
+
+  /// 视口停泊浮动按钮：流式涌入或有新内容流出且用户手动向上滚动查看前文时，
+  /// 右下角浮出精致胶囊按钮（“↓ 有新内容流出”）；点击后平滑滚回最新行并恢复跟随。
+  Widget _buildBackToLatestButton(ThemeData theme) {
+    final palette = AppTheme.readingOf(context);
+    final show = !_atBottom &&
+        (_hasNewStreamingContent || (_busy && _live.isNotEmpty));
+
+    return Positioned(
+      right: 18,
+      bottom: 24,
+      child: AnimatedSlide(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        offset: show ? Offset.zero : const Offset(0, 1.5),
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeInOut,
+          opacity: show ? 1.0 : 0.0,
+          child: IgnorePointer(
+            ignoring: !show,
+            child: Material(
+              color: Colors.transparent,
+              elevation: 4,
+              borderRadius: BorderRadius.circular(20),
+              shadowColor: Colors.black.withValues(alpha: 0.25),
+              child: InkWell(
+                key: const ValueKey('back_to_latest_button'),
+                borderRadius: BorderRadius.circular(20),
+                onTap: _scrollToBottomAndFollow,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: palette.accent,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.2),
+                      width: 1,
+                    ),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Icon(
+                        Icons.arrow_downward_rounded,
+                        size: 14,
+                        color: Colors.white,
+                      ),
+                      SizedBox(width: 5),
+                      Text(
+                        '有新内容流出',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       ),

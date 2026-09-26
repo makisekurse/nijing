@@ -87,8 +87,69 @@ class Providers {
     return '$base/chat/completions';
   }
 
-  /// qwen3 系列默认开启思考模式 —— 会额外产出思维链 token，
-  /// 既慢又贵，还会把思考过程混进正文。必须显式关掉。
-  static bool supportsThinkingSwitch(String model) =>
-      model.toLowerCase().startsWith('qwen3');
+  /// 只有支持思考模式的特定推理模型（如 qwen3.8 系列、qwen3、qwq 等）才支持 enable_thinking 参数。
+  /// 普通模型（如 qwen-plus、qwen-turbo、qwen-max 等）绝不传 enable_thinking 以免百炼抛 400。
+  static bool supportsThinkingSwitch(String model) {
+    final norm = normalizeModelName(model).toLowerCase().trim();
+    if (norm.startsWith('qwen3.8') ||
+        norm.startsWith('qwen3-') ||
+        norm.startsWith('qwen3_') ||
+        norm == 'qwen3' ||
+        norm.startsWith('qwq')) {
+      return true;
+    }
+    return false;
+  }
+
+  /// 是否应当向请求体注入 enable_thinking 参数：
+  /// 1. 自定义 OpenAI 兼容端点绝不注入（防止反代/第三方网关报错 400）；
+  /// 2. DeepSeek 等通用端点绝不注入；
+  /// 3. 仅限百炼且模型本身属于真正支持思考开关的推理模型（如 qwen3.8 系列、qwq）。
+  static bool supportsThinkingParameter({
+    required String apiProvider,
+    required String modelName,
+  }) {
+    if (apiProvider == 'custom') return false;
+    if (apiProvider == 'deepseek') return false;
+    return supportsThinkingSwitch(normalizeModelName(modelName));
+  }
+
+  /// 模型名称智能归一化与拼写自愈。
+  /// 兼容用户手填时漏写连字符（如 `qwen3.8flash` -> `qwen3.8-flash`、`qwen3.8max` -> `qwen3.8-max`），
+  /// 以及大小写（如 `Qwen3.8-Flash` -> `qwen3.8-flash`）或下划线变体，
+  /// 避免因官方模型代码大小写或连字符不匹配直接被服务端报 400 拒绝。
+  static String normalizeModelName(String raw) {
+    final m = raw.trim();
+    if (m.isEmpty) return m;
+    final lower = m.toLowerCase();
+
+    // 常见标准模型的连字符/下划线拼写变体与大小写自愈
+    final stripped = lower.replaceAll(RegExp(r'[-_]'), '');
+    switch (stripped) {
+      case 'qwen3.8flash':
+        return 'qwen3.8-flash';
+      case 'qwen3.8max':
+        return 'qwen3.8-max';
+      case 'qwen3.7flash':
+        return 'qwen3.7-flash';
+      case 'qwen3.7plus':
+        return 'qwen3.7-plus';
+      case 'qwenplus':
+        return 'qwen-plus';
+      case 'qwenturbo':
+        return 'qwen-turbo';
+      case 'qwenmax':
+        return 'qwen-max';
+      case 'deepseekchat':
+        return 'deepseek-chat';
+      case 'deepseekreasoner':
+        return 'deepseek-reasoner';
+    }
+
+    if (stripped.startsWith('qwq32b')) {
+      return 'qwq-32b-preview';
+    }
+
+    return m;
+  }
 }

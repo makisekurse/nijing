@@ -64,6 +64,7 @@ class GenerationController extends ChangeNotifier {
   }) async {
     if (isBusy) return;
 
+    final backupChoices = List<String>.from(session.choices);
     client.reset();
     this.session = session;
     this.godMode = godMode;
@@ -74,7 +75,8 @@ class GenerationController extends ChangeNotifier {
     noticeSticky = false;
     degraded = false;
     thoughtExpanded = false;
-    session.clearChoices();
+    // 选项保留防闪烁：不在此刻提前清空 choices；
+    // 待服务端握手成功并涌入首个 delta 增量时再清空。若在 100ms 握手阶段即报 400，原有选项完好保留供就地重试。
     notifyListeners();
 
     RuntimeLog.i('GenerationController', '[$slotId] 开始推演：action="$action"');
@@ -99,6 +101,9 @@ class GenerationController extends ChangeNotifier {
         if (client.isCancelled) break;
         switch (ev.kind) {
           case GenEventKind.delta:
+            if (session.choices.isNotEmpty) {
+              session.clearChoices();
+            }
             live += ev.text;
             notifyListeners();
             break;
@@ -143,6 +148,9 @@ class GenerationController extends ChangeNotifier {
         pendingAction = '';
         notice = '已中止本次推演。';
         noticeSticky = true;
+        if (session.choices.isEmpty && backupChoices.isNotEmpty) {
+          session.restoreChoices(backupChoices);
+        }
         notifyListeners();
         return;
       }
@@ -195,6 +203,9 @@ class GenerationController extends ChangeNotifier {
         status = GenerationStatus.failed;
         live = '';
         pendingAction = '';
+        if (session.choices.isEmpty && backupChoices.isNotEmpty) {
+          session.restoreChoices(backupChoices);
+        }
         notifyListeners();
       }
     } catch (e) {
@@ -204,6 +215,9 @@ class GenerationController extends ChangeNotifier {
         pendingAction = '';
         notice = '已中止本次推演。';
         noticeSticky = true;
+        if (session.choices.isEmpty && backupChoices.isNotEmpty) {
+          session.restoreChoices(backupChoices);
+        }
         notifyListeners();
         return;
       }
@@ -213,6 +227,9 @@ class GenerationController extends ChangeNotifier {
       noticeSticky = true;
       live = '';
       pendingAction = '';
+      if (session.choices.isEmpty && backupChoices.isNotEmpty) {
+        session.restoreChoices(backupChoices);
+      }
       notifyListeners();
     }
   }
