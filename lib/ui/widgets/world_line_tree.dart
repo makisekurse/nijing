@@ -94,7 +94,7 @@ class WorldLineTreeView extends StatelessWidget {
     final isRoot = depth == 0;
 
     return Padding(
-      padding: EdgeInsets.only(left: (depth * 20).toDouble(), bottom: 10),
+      padding: const EdgeInsets.only(bottom: 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -115,11 +115,11 @@ class WorldLineTreeView extends StatelessWidget {
               ),
               child: Row(
                 children: <Widget>[
-                  // 树形节点图标
+                  // 树形节点图标：子分支使用清晰的转角分支箭头
                   Icon(
                     isRoot
                         ? (isActive ? Icons.hub_rounded : Icons.hub_outlined)
-                        : (isActive ? Icons.call_split_rounded : Icons.alt_route_rounded),
+                        : Icons.subdirectory_arrow_right_rounded,
                     size: 20,
                     color: isActive
                         ? palette.accent
@@ -185,11 +185,15 @@ class WorldLineTreeView extends StatelessWidget {
                                   ),
                                 ),
                               ),
-                            Text(
-                              '共 ${l.chapterCount} 幕${l.latestDate.isNotEmpty ? " · ${l.latestDate}" : ""}',
-                              style: TextStyle(
-                                fontSize: 11.5,
-                                color: palette.muted,
+                            Expanded(
+                              child: Text(
+                                '共 ${l.chapterCount} 幕${l.latestDate.isNotEmpty ? " · ${l.latestDate}" : ""}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  color: palette.muted,
+                                ),
                               ),
                             ),
                           ],

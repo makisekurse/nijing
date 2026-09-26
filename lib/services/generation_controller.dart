@@ -94,7 +94,6 @@ class GenerationController extends ChangeNotifier {
         chronicle: session.chronicle,
         worldState: WorldStateService.renderForPrompt(session.worldState),
         godMode: godMode,
-        workspaceId: slotId,
       );
 
       await for (final ev in stream) {

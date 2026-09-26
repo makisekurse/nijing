@@ -2424,6 +2424,18 @@ final x = 1;
       controller.reset();
       await tester.pump(const Duration(milliseconds: 100));
     });
+
+    test('v1.3.6 · GenerationController 与 WorldLineTreeView 修复 · workspaceId 不污染公共域名', () {
+      final config = AppConfig(apiProvider: 'bailian');
+      expect(
+        Providers.resolveBaseUrl(config, workspaceId: ''),
+        'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      );
+      expect(
+        Providers.chatCompletionsUrl(config, workspaceId: ''),
+        'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+      );
+    });
   });
 }
 
