@@ -1753,13 +1753,36 @@ final x = 1;
       expect(RuntimeLog.dump(), contains('line ${RuntimeLog.maxEntries + 49}'));
     });
 
-    test('导出文本包含环境表头且不含 API Key 形态', () {
+    test('导出文本包含环境表头且密钥被脱敏', () {
       RuntimeLog.enabled = true;
       RuntimeLog.i('LLM', '请求 qwen3.8-flash');
+      RuntimeLog.e(
+        'Fallback',
+        '连接失败：https://api.example.com/v1/chat?api_key=sk-live-AbCdEf0123456789 '
+        'Authorization: Bearer sk-proj-ZZZZZZZZZZZZZZZZ',
+      );
       final dump = RuntimeLog.dump();
       expect(dump, contains('拟境 · 运行日志'));
       expect(dump, contains('qwen3.8-flash'));
-      expect(dump, isNot(contains('sk-')));
+      // 模型名要留着，凭证必须被抹掉
+      expect(dump, isNot(contains('sk-live-AbCdEf0123456789')));
+      expect(dump, isNot(contains('sk-proj-ZZZZZZZZZZZZZZZZ')));
+      expect(dump, contains('[已脱敏]'));
+    });
+
+    test('脱敏覆盖 query / Bearer / 常见前缀 / JWT', () {
+      expect(RuntimeLog.redact('?key=abc123'), isNot(contains('abc123')));
+      expect(RuntimeLog.redact('?api_key=abc123&x=1'),
+          isNot(contains('abc123')));
+      expect(RuntimeLog.redact('Bearer sk-abcdefghijklmnop'),
+          isNot(contains('sk-abcdefghijklmnop')));
+      expect(RuntimeLog.redact('sk-proj-abcdefghijklmnop'),
+          isNot(contains('abcdefghijklmnop')));
+      final jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefghijklmnop';
+      expect(RuntimeLog.redact(jwt), isNot(contains('abcdefghijklmnop')));
+      // 正常技术文本不该被误伤
+      expect(RuntimeLog.redact('模型 qwen3.8-flash 返回 200'),
+          contains('qwen3.8-flash'));
     });
 
     test('超长条目被截断', () {

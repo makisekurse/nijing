@@ -46,6 +46,30 @@ class RuntimeLog {
 
   static int get count => _buf.length;
 
+  /// 密钥脱敏兜底 —— **最后一道防线**。
+  ///
+  /// 调用方约定「不传 key」，但网络异常 message / 服务端回显 / 代理响应
+  /// 都可能夹带凭证。与其在每个调用点打补丁，不如在这里统一过滤一次。
+  /// 宁可把正常字符误伤成 `***`，也不能让 key 落进可导出的日志里。
+  static final List<RegExp> _secretPatterns = <RegExp>[
+    // Bearer xxx / Authorization: xxx
+    RegExp(r'(?i)\b(bearer|authorization|api[-_]?key|x-api-key)\b\s*[:=]?\s*\S+'),
+    // ?key=xxx / &api_key=xxx / "apiKey":"xxx"
+    RegExp(r'(?i)[?&](key|api[-_]?key|token|access[-_]?token)=[^&\s]+'),
+    // sk-xxx / sk_xxx / gsk_xxx / hf_xxx 这类已知前缀
+    RegExp(r'\b(?:sk|gsk|hf|pk|rk)[-_][A-Za-z0-9_\-]{12,}'),
+    // JWT：三段式 eyJ...
+    RegExp(r'\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}'),
+  ];
+
+  static String redact(String s) {
+    var out = s;
+    for (final p in _secretPatterns) {
+      out = out.replaceAll(p, '[已脱敏]');
+    }
+    return out;
+  }
+
   static void log(
     String level,
     String tag,
@@ -55,7 +79,7 @@ class RuntimeLog {
     if (!enabled) return;
     if (detail && !verbose) return;
 
-    var msg = message.replaceAll('\n', ' ⏎ ');
+    var msg = redact(message).replaceAll('\n', ' ⏎ ');
     if (msg.length > maxMessageChars) {
       msg = '${msg.substring(0, maxMessageChars)}…(+${msg.length - maxMessageChars})';
     }
