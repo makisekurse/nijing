@@ -53,9 +53,16 @@ class RuntimeLog {
   /// 宁可把正常字符误伤成 `***`，也不能让 key 落进可导出的日志里。
   static final List<RegExp> _secretPatterns = <RegExp>[
     // Bearer xxx / Authorization: xxx
-    RegExp(r'(?i)\b(bearer|authorization|api[-_]?key|x-api-key)\b\s*[:=]?\s*\S+'),
-    // ?key=xxx / &api_key=xxx / "apiKey":"xxx"
-    RegExp(r'(?i)[?&](key|api[-_]?key|token|access[-_]?token)=[^&\s]+'),
+    // 注意：Dart 的 RegExp 不支持 `(?i)` 内联标志，大小写不敏感要用 caseSensitive:false
+    RegExp(
+      r'\b(bearer|authorization|api[-_]?key|x-api-key)\b\s*[:=]?\s*\S+',
+      caseSensitive: false,
+    ),
+    // ?key=xxx / &api_key=xxx
+    RegExp(
+      r'[?&](key|api[-_]?key|token|access[-_]?token)=[^&\s]+',
+      caseSensitive: false,
+    ),
     // sk-xxx / sk_xxx / gsk_xxx / hf_xxx 这类已知前缀
     RegExp(r'\b(?:sk|gsk|hf|pk|rk)[-_][A-Za-z0-9_\-]{12,}'),
     // JWT：三段式 eyJ...
