@@ -227,12 +227,20 @@ class ResponseParser {
       } else if (terminateOpenThink && (tag == 'think' || tag == 'thought')) {
         // ⚠️ 模型常常忘记写 `</think>`。不管的话它一路吃到文末，
         // 正文整个被当成思考 → 正文为空 → 判定「空内容」→ 反复重试。
-        // 把**紧跟其后的第一个结构标签**当作思考的终点。
+        //
+        // 探测未闭合 think 的截断终点：
+        // 1. 查找紧跟其后的第一个结构标签（如 <date>, <choices> 等）作为搜索上限；
+        // 2. 在上限范围内，通过显式转折前缀、自然叙事正文特征与段落断崖探测截断点，
+        //    严禁将没有 <body 标签的文学正文误吞为思考。
         final next = _openTag.firstMatch(raw.substring(contentStart));
-        if (next != null) {
-          end = contentStart + next.start;
-          contentEnd = end;
-        }
+        final searchLimit =
+            next != null ? next.start : raw.length - contentStart;
+        final candidate =
+            raw.substring(contentStart, contentStart + searchLimit);
+        final cutoff = _detectOpenThinkCutoff(candidate);
+
+        end = contentStart + cutoff;
+        contentEnd = end;
       }
 
       blocks.add(_Block(
@@ -253,6 +261,117 @@ class ResponseParser {
       if ((m.group(1) ?? '').toLowerCase() == tag) return m;
     }
     return null;
+  }
+
+  static final List<String> _metaKeywords = <String>[
+    '分析', '推演', '本幕', '主角', '玩家', '设定', '剧情', '反转', '伏笔',
+    '选项', '决断', '字数', '结构', '状态', '契约', '写作', '决策', '策略',
+    '处境', '动机', '视角', '输出', '思考', '首先', '其次', '考虑', '铺垫',
+    '线索', '步骤', '设计', '大纲', '衔接', '构思', '前文',
+    '权衡', '局势', '落笔', '思路', '梳理', '盘点', '总结', '先来', '我们来',
+    'prompt', 'think', 'reasoning', 'user', 'plot',
+  ];
+
+  /// 探测未闭合 think 的截断点。
+  /// 返回相对于 [candidate] 起始处的安全截断偏移量。
+  static int _detectOpenThinkCutoff(String candidate) {
+    if (candidate.isEmpty) return 0;
+
+    // 1. 显式转折标识探测（如「正文：」、「【正文】」、「---」等）
+    final explicitTransition = RegExp(
+      r'(?:\r?\n)+(?:【正文】|（正文）|正文[：:]|正式推演[：:]|现在开始[：:]|剧情推演[：:]|---\s*(?:\r?\n)+)',
+      caseSensitive: false,
+    );
+    final transMatch = explicitTransition.firstMatch(candidate);
+    if (transMatch != null && transMatch.start > 0) {
+      return transMatch.start;
+    }
+
+    final firstTextMatch = RegExp(r'\S').firstMatch(candidate);
+    if (firstTextMatch == null) return 0;
+
+    // 检查第一段是否已经是正文（即模型完全没有思考，直接在 <think> 里输出正文）
+    final doublePattern = RegExp(r'(?:\r?\n)\s*(?:\r?\n)+');
+    final singlePattern = RegExp(r'(?:\r?\n)+');
+
+    final afterFirst = candidate.substring(firstTextMatch.start);
+    final firstDouble = doublePattern.firstMatch(afterFirst);
+    final firstSingle = singlePattern.firstMatch(afterFirst);
+    final firstEndOffset = firstDouble?.start ??
+        (firstSingle?.start ?? afterFirst.length);
+    final firstPara = candidate
+        .substring(firstTextMatch.start, firstTextMatch.start + firstEndOffset)
+        .trim();
+    if (_looksLikeNarrativeBody(firstPara, isFirstPara: true)) {
+      return 0;
+    }
+
+    // 2. 自然叙事正文特征与段落断崖探测
+    // 优先检测双空行段落断崖（Markdown 标准段落分界）
+    for (final sep in doublePattern.allMatches(candidate)) {
+      if (sep.start < firstTextMatch.start) continue;
+      final nextCandidate = candidate.substring(sep.end);
+      final nextDouble = doublePattern.firstMatch(nextCandidate);
+      final nextParaEnd =
+          nextDouble != null ? sep.end + nextDouble.start : candidate.length;
+      final nextParaText = candidate.substring(sep.end, nextParaEnd).trim();
+
+      if (nextParaText.isNotEmpty &&
+          _looksLikeNarrativeBody(nextParaText, isFirstPara: false)) {
+        return sep.start;
+      }
+    }
+
+    // 若无双空行断崖，再按单换行探测（要求具备对话引号或具备完整标点的自然句式）
+    for (final sep in singlePattern.allMatches(candidate)) {
+      if (sep.start < firstTextMatch.start) continue;
+      final nextCandidate = candidate.substring(sep.end);
+      final nextSingle = singlePattern.firstMatch(nextCandidate);
+      final nextParaEnd =
+          nextSingle != null ? sep.end + nextSingle.start : candidate.length;
+      final nextParaText = candidate.substring(sep.end, nextParaEnd).trim();
+
+      if (nextParaText.isNotEmpty &&
+          _looksLikeNarrativeBody(nextParaText, isFirstPara: false) &&
+          (nextParaText.contains('“') ||
+              nextParaText.contains('「') ||
+              nextParaText.length >= 10)) {
+        return sep.start;
+      }
+    }
+
+    return candidate.length;
+  }
+
+  /// 判定某一段是否具备文学小说自然叙事特征（而非元思维分析）。
+  static bool _looksLikeNarrativeBody(String text,
+      {required bool isFirstPara}) {
+    if (text.isEmpty) return false;
+
+    // 排除列表式输出（如 1. 2. - *）
+    final isList = RegExp(r'^\s*[-*•\d+\.]').hasMatch(text);
+    if (isList) return false;
+
+    final hasDialogue = text.contains('“') ||
+        text.contains('「') ||
+        text.contains('”') ||
+        text.contains('」');
+    // 如果包含人物对话，直接判定为正文叙事（思考过程绝不会出现角色直接对话）
+    if (hasDialogue) return true;
+
+    var metaCount = 0;
+    for (final kw in _metaKeywords) {
+      if (text.contains(kw)) metaCount++;
+    }
+
+    final hasTerminal = text.contains('。') ||
+        text.contains('！') ||
+        text.contains('？') ||
+        text.contains('……') ||
+        text.contains('——');
+
+    // 无思维词且具备中文句式标点（支持短句氛围开篇如「夜色深沉。」）
+    return metaCount == 0 && hasTerminal && text.length >= 4;
   }
 
   /// 按位置剔除所有结构块跨度，其余原样保留。
@@ -433,10 +552,10 @@ class ResponseParser {
   //
   // 刻意**不做机翻**：把英文自动翻译成中文只会引入错误，不如原文保留。
 
-  static final RegExp _mdFence = RegExp(r'^\s*```.*$', multiLine: true);
-  static final RegExp _mdHeading = RegExp(r'^\s{0,3}#{1,6}\s*', multiLine: true);
-  static final RegExp _mdQuote = RegExp(r'^\s{0,3}>\s?', multiLine: true);
-  static final RegExp _mdBullet = RegExp(r'^\s{0,3}[-*+•]\s+', multiLine: true);
+  static final RegExp _mdFence = RegExp(r'^[ \t]*```.*$', multiLine: true);
+  static final RegExp _mdHeading = RegExp(r'^[ \t]{0,3}#{1,6}[ \t]*', multiLine: true);
+  static final RegExp _mdQuote = RegExp(r'^[ \t]{0,3}>[ \t]?', multiLine: true);
+  static final RegExp _mdBullet = RegExp(r'^[ \t]{0,3}[-*+•][ \t]+', multiLine: true);
 
   /// 规范化思考文本，供 LLM 流式转换与 [parse] 共用。
   ///
@@ -470,12 +589,25 @@ class ResponseParser {
       '',
     );
 
-    final lines = s
-        .split('\n')
-        .map((l) => l.trimRight())
-        .where((l) => l.trim().isNotEmpty)
-        .toList();
-    return lines.join('\n').trim();
+    // 保留段落之间的单个空行（连续多空行折叠为一个空行）
+    final rawLines = s.split('\n').map((l) => l.trimRight()).toList();
+    final collapsed = <String>[];
+    var lastWasEmpty = false;
+    for (final line in rawLines) {
+      if (line.trim().isEmpty) {
+        if (!lastWasEmpty && collapsed.isNotEmpty) {
+          collapsed.add('');
+          lastWasEmpty = true;
+        }
+      } else {
+        collapsed.add(line);
+        lastWasEmpty = false;
+      }
+    }
+    while (collapsed.isNotEmpty && collapsed.last.isEmpty) {
+      collapsed.removeLast();
+    }
+    return collapsed.join('\n').trim();
   }
 }
 

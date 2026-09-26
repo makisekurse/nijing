@@ -496,10 +496,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _slider(
           theme,
           label: '单幕目标字数',
-          value: _config.maxWords.toDouble(),
+          value: _config.maxWords.toDouble().clamp(200, 3000),
           min: 200,
-          max: 1200,
-          divisions: 20,
+          max: 3000,
+          divisions: 56,
           display: '${_config.maxWords} 字',
           onChanged: (v) => _apply(_config.copyWith(maxWords: v.round())),
         ),

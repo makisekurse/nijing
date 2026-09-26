@@ -1,5 +1,7 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../services/runtime_log.dart';
+
 /// API Key 的加密存储。
 ///
 /// Android 走 EncryptedSharedPreferences，落盘是密文。
@@ -21,17 +23,22 @@ class SecureStore {
   static bool get isDegraded => _degraded;
 
   static Future<String> readApiKey() async {
+    var key = _memoryFallback;
     try {
       final v = await _storage.read(key: _keyApiKey);
-      if (v != null) return v;
+      if (v != null) key = v;
     } catch (_) {
       _degraded = true;
     }
-    return _memoryFallback;
+    if (key.isNotEmpty) {
+      RuntimeLog.configuredApiKey = key;
+    }
+    return key;
   }
 
   static Future<void> writeApiKey(String value) async {
     _memoryFallback = value;
+    RuntimeLog.configuredApiKey = value;
     try {
       await _storage.write(key: _keyApiKey, value: value);
       _degraded = false;
@@ -42,6 +49,7 @@ class SecureStore {
 
   static Future<void> clearApiKey() async {
     _memoryFallback = '';
+    RuntimeLog.configuredApiKey = null;
     try {
       await _storage.delete(key: _keyApiKey);
     } catch (_) {

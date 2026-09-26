@@ -6,7 +6,6 @@ import 'package:http/http.dart' as http;
 import '../core/app_error.dart';
 import '../models/app_config.dart';
 import 'providers.dart';
-import 'response_parser.dart';
 import 'runtime_log.dart';
 
 /// 统一的流式大模型客户端。
@@ -73,8 +72,8 @@ class LlmClient {
     }
   }
 
-  /// 根据单幕目标字数计算具备充足缓冲的 max_tokens（按字数约 3 倍比例配置，保底 2048，上限 8192）。
-  static int calculateMaxTokens(int maxWords) => (maxWords * 3).clamp(2048, 8192);
+  /// 根据单幕目标字数计算具备充足缓冲的 max_tokens（按字数约 3 倍比例配置，保底 2048，上限 16384）。
+  static int calculateMaxTokens(int maxWords) => (maxWords * 3).clamp(2048, 16384);
 
   Stream<String> _singleRequest({
     required AppConfig config,
@@ -190,7 +189,7 @@ class LlmClient {
                       insideReasoning = true;
                       chunkBuf.write('<think>');
                     }
-                    chunkBuf.write(ResponseParser.cleanThoughtForShow(reasoning));
+                    chunkBuf.write(reasoning);
                   }
 
                   if (content is String && content.isNotEmpty) {

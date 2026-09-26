@@ -11,6 +11,7 @@ import '../../models/save_slot.dart';
 import '../../models/world_book.dart';
 import '../../services/file_export_service.dart';
 import '../../services/game_session.dart';
+import '../../services/generation_controller.dart';
 import '../../services/save_service.dart';
 import 'about_screen.dart';
 import 'continue_tab.dart';
@@ -667,6 +668,7 @@ class _HomeShellState extends State<HomeShell> {
                     Navigator.pop(ctx);
                     final ok = await _confirm('删除《${slot.title}》这一局？');
                     if (!ok) return;
+                    GenerationController.disposeSlot(slot.id);
                     await SaveService.delete(slot.id);
                     if (_activeSlotId == slot.id) {
                       await PrefsStore.remove(_kActiveSlot);
@@ -888,6 +890,7 @@ class _HomeShellState extends State<HomeShell> {
                       '确定清空全部数据？世界书、存档、备份与 API Key 都会被删除，无法恢复。',
                     );
                     if (!ok) return;
+                    GenerationController.resetAll();
                     await SaveService.saveAll(<SaveSlot>[]);
                     await WorldBookRepository.saveAll(<WorldBook>[]);
                     await PrefsStore.remove(_kActiveSlot);

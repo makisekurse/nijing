@@ -5,24 +5,41 @@ import '../themes/app_theme.dart';
 /// 流式思考面板：生成过程中实时展示模型的思维链。
 ///
 /// 默认**折叠**（保持阅读页的零 HUD 质感），点标题栏展开；
-/// 正文开始流出后由调用方隐藏，避免和正文抢注意力。
+/// 推演进行期间只要有思考，思考面板全程常驻在正文上方，用户展开后绝不自动关闭。
 class LiveThoughtView extends StatefulWidget {
   /// 规范化之后的思考文本（增量追加）。
   final String thought;
+  final bool initialExpanded;
+  final ValueChanged<bool>? onExpansionChanged;
 
-  const LiveThoughtView({super.key, required this.thought});
+  const LiveThoughtView({
+    super.key,
+    required this.thought,
+    this.initialExpanded = false,
+    this.onExpansionChanged,
+  });
 
   @override
   State<LiveThoughtView> createState() => _LiveThoughtViewState();
 }
 
 class _LiveThoughtViewState extends State<LiveThoughtView> {
-  bool _expanded = false;
+  late bool _expanded;
   final ScrollController _scroll = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _expanded = widget.initialExpanded;
+  }
 
   @override
   void didUpdateWidget(covariant LiveThoughtView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.initialExpanded != oldWidget.initialExpanded &&
+        widget.initialExpanded != _expanded) {
+      _expanded = widget.initialExpanded;
+    }
     if (_expanded && widget.thought.length != oldWidget.thought.length) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!_scroll.hasClients) return;
@@ -53,7 +70,10 @@ class _LiveThoughtViewState extends State<LiveThoughtView> {
         children: <Widget>[
           InkWell(
             borderRadius: BorderRadius.circular(8),
-            onTap: () => setState(() => _expanded = !_expanded),
+            onTap: () {
+              setState(() => _expanded = !_expanded);
+              widget.onExpansionChanged?.call(_expanded);
+            },
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               child: Row(

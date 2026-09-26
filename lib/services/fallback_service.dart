@@ -151,6 +151,10 @@ class FallbackService {
           AppErrorKind.refused,
           '模型回避了这一段的推演。',
         );
+        if (attempt < _maxNudge) {
+          yield const GenEvent.restart();
+          yield const GenEvent.notice('模型回避了这一段的推演，正在改写重试…');
+        }
         continue;
       }
 
@@ -167,6 +171,10 @@ class FallbackService {
 
       if (parsed.body.trim().isEmpty) {
         lastError = const AppError(AppErrorKind.refused, '模型返回了空内容。');
+        if (attempt < _maxNudge) {
+          yield const GenEvent.restart();
+          yield const GenEvent.notice('模型返回了空内容，正在重试…');
+        }
         continue;
       }
       if (!parsed.hasUsableChoices) {
@@ -174,6 +182,10 @@ class FallbackService {
           AppErrorKind.truncated,
           '输出缺少决断分支（<choices>）。',
         );
+        if (attempt < _maxNudge) {
+          yield const GenEvent.restart();
+          yield const GenEvent.notice('输出缺少决断分支，正在重试…');
+        }
         continue;
       }
 
@@ -185,13 +197,12 @@ class FallbackService {
     final err = lastError ??
         const AppError(AppErrorKind.unknown, '生成失败，原因未知。');
     RuntimeLog.e('Fallback', '三级兜底触发：${err.kind.name} · ${err.message}');
+    // ---- 三级兜底：本地降级，保证不断流 ----
+    yield const GenEvent.restart();
     yield GenEvent.notice(
       '${err.message}\n可尝试：在设置里换一个模型或换一家服务商'
       '（不同厂商的内容尺度不同），或点「重新生成本幕」。',
     );
-
-    // ---- 三级兜底：本地降级，保证不断流 ----
-    yield const GenEvent.restart();
     yield GenEvent.done(
       ParsedChapter(
         body: _localDegradedBody(playerAction, book),

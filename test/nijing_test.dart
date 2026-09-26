@@ -16,6 +16,9 @@ import 'package:nijing/services/response_parser.dart';
 import 'package:nijing/services/save_service.dart';
 import 'package:nijing/services/story_export_service.dart';
 import 'package:nijing/services/text_layout.dart';
+import 'package:nijing/core/app_error.dart';
+import 'package:nijing/services/fallback_service.dart';
+import 'package:nijing/services/generation_controller.dart';
 import 'package:nijing/services/providers.dart';
 import 'package:nijing/services/runtime_log.dart';
 import 'package:nijing/services/wakelock_service.dart';
@@ -1814,5 +1817,340 @@ final x = 1;
       expect(restored.verboseLog, isFalse);
     });
   });
+
+  // ==========================================================================
+  // v1.3.4 五项核心改进与单幕上限3000专项测试
+  // ==========================================================================
+
+  group('v1.3.4 · GenerationController 独立生命周期与状态机', () {
+    tearDown(() {
+      GenerationController.resetAll();
+    });
+
+    test('按 slotId 维系单例与独立状态', () {
+      final c1 = GenerationController.forSlot('slot_alpha');
+      final c2 = GenerationController.forSlot('slot_alpha');
+      final c3 = GenerationController.forSlot('slot_beta');
+
+      expect(identical(c1, c2), isTrue);
+      expect(identical(c1, c3), isFalse);
+      expect(c1.slotId, 'slot_alpha');
+      expect(c3.slotId, 'slot_beta');
+    });
+
+    test('状态机初始为 idle，cancel 和 reset 正常工作', () {
+      final c = GenerationController.forSlot('slot_test');
+      expect(c.status, GenerationStatus.idle);
+      expect(c.isBusy, isFalse);
+
+      c.live = '流式中...';
+      c.pendingAction = '拔刀迎敌';
+      c.cancel();
+
+      expect(c.status, GenerationStatus.idle);
+      expect(c.isBusy, isFalse);
+      expect(c.live, isEmpty);
+      expect(c.notice, contains('已中止本次推演'));
+      expect(c.noticeSticky, isTrue);
+
+      c.reset();
+      expect(c.notice, isEmpty);
+      expect(c.noticeSticky, isFalse);
+    });
+
+    test('支持多订阅者监听与解除监听', () {
+      final c = GenerationController.forSlot('slot_listener');
+      var notifyCount = 0;
+      void listener() => notifyCount++;
+
+      c.addListener(listener);
+      c.reset();
+      expect(notifyCount, 1);
+
+      c.removeListener(listener);
+      c.reset();
+      expect(notifyCount, 1); // 移除后不再接收通知
+    });
+
+    test('cancel 之后再次 startGeneration 客户端 isCancelled 状态被正确重置', () {
+      final c = GenerationController.forSlot('slot_cancel_then_start');
+      c.cancel();
+      expect(c.client.isCancelled, isTrue);
+
+      c.reset();
+      expect(c.client.isCancelled, isFalse);
+      expect(c.status, GenerationStatus.idle);
+      expect(c.thoughtExpanded, isFalse);
+    });
+
+    test('LiveThoughtView 展开状态受 GenerationController 托管并在重置时归零', () {
+      final c = GenerationController.forSlot('slot_thought_expanded');
+      expect(c.thoughtExpanded, isFalse);
+      c.thoughtExpanded = true;
+      expect(c.thoughtExpanded, isTrue);
+
+      c.reset();
+      expect(c.thoughtExpanded, isFalse);
+    });
+  });
+
+  group('v1.3.4 · ResponseParser 未闭合 think 自然叙事正文特征与段落断崖探测', () {
+    test('未闭合 think 后接文学正文与 choices：文学正文绝不被吞入思考', () {
+      const raw = '''
+<think>
+我们来推演一下这一幕的走向。主角需要面临生死考验，剧情必须在这里收紧节奏。
+
+夜色深沉，寒风如刀割般刮过脸颊。
+林砚握紧了手中的短刀，屏息凝神，倾听着门外由远及近的脚步声。
+“掌柜的，北边来人了。”伙计压低嗓音，额头上布满冷汗。
+
+<choices>
+1. 拔刀迎战，先发制人
+2. 藏入暗格，静观其变
+</choices>
+''';
+      final p = ResponseParser.parse(raw);
+      expect(p.thought, contains('推演一下这一幕的走向'));
+      expect(p.thought, isNot(contains('夜色深沉')));
+      expect(p.body, contains('夜色深沉，寒风如刀割般刮过脸颊。'));
+      expect(p.body, contains('林砚握紧了手中的短刀'));
+      expect(p.body, contains('掌柜的，北边来人了'));
+      expect(p.choices.length, 2);
+      expect(p.hasUsableChoices, isTrue);
+    });
+
+    test('未闭合 think 后接对话引号“...”：自动断崖截断', () {
+      const raw = '''
+<think>
+分析局势：主角决定直接对质。
+“你到底是谁？”他冷冷质问。对方并未回答，只是缓缓拔出了腰间的长剑。
+<choices>
+迎战
+后撤
+</choices>
+''';
+      final p = ResponseParser.parse(raw);
+      expect(p.thought, contains('分析局势'));
+      expect(p.thought, isNot(contains('你到底是谁')));
+      expect(p.body, contains('“你到底是谁？”他冷冷质问。'));
+      expect(p.choices.length, 2);
+    });
+
+    test('未闭合 think 后接显式「正文：」标识：截断并自动清洗标识前缀', () {
+      const raw = '''
+<think>
+本幕设计构思：让主角在风雪中抵达客栈。
+
+正文：
+大雪纷飞，遮天蔽日。林远踏入风雪客栈的那一刻，喧闹的堂内瞬间安静了下来。
+
+<choices>
+1. 径直走向柜台
+2. 找角落坐下
+</choices>
+''';
+      final p = ResponseParser.parse(raw);
+      expect(p.thought, contains('本幕设计构思'));
+      expect(p.body, isNot(contains('正文：')));
+      expect(p.body, contains('大雪纷飞，遮天蔽日。'));
+      expect(p.choices.length, 2);
+    });
+
+    test('流式 splitLive 对未闭合 think 自然叙事正文实时分流', () {
+      const raw = '<think>思考推演中\n\n大雪纷飞，寒风呼啸。林远推开了客栈的大门。';
+      final (thought, body) = ResponseParser.splitLive(raw);
+      expect(thought, '思考推演中');
+      expect(body, '大雪纷飞，寒风呼啸。林远推开了客栈的大门。');
+    });
+
+    test('未闭合 think 后接短句氛围开篇（如「夜色深沉。」）：短句绝不被吞入思考', () {
+      const raw = '''
+<think>
+推演思路：安排主角在风雪中抵达客栈。
+
+夜色深沉。
+
+林远推开客栈厚重的木门，风雪呼啸着涌入大堂。
+
+<choices>
+1. 走向柜台
+2. 拔剑警戒
+</choices>
+''';
+      final p = ResponseParser.parse(raw);
+      expect(p.thought, contains('推演思路'));
+      expect(p.thought, isNot(contains('夜色深沉。')));
+      expect(p.body, contains('夜色深沉。'));
+      expect(p.body, contains('林远推开客栈厚重的木门'));
+      expect(p.choices.length, 2);
+    });
+
+    test('未闭合 think 后接人物对话中出现动机/局势等词：对话绝不被误判为思考', () {
+      const raw = '''
+<think>
+梳理当前冲突矛盾。
+
+“当务之急是弄清他的动机。”林砚低声道，“局势对我们极为不利，必须步步为营。”
+
+<choices>
+1. 追问实情
+2. 调动守卫
+</choices>
+''';
+      final p = ResponseParser.parse(raw);
+      expect(p.thought, contains('梳理当前冲突矛盾'));
+      expect(p.thought, isNot(contains('当务之急是弄清他的动机')));
+      expect(p.body, contains('“当务之急是弄清他的动机。”'));
+      expect(p.body, contains('局势对我们极为不利'));
+      expect(p.choices.length, 2);
+    });
+  });
+
+  group('v1.3.4 · 思考排版规范化保留单个空行', () {
+    test('段落之间保留单个空行，多空行折叠', () {
+      const raw = '''
+这是第一段分析。
+
+这是第二段分析。
+
+
+
+这是第三段分析。
+''';
+      final cleaned = ResponseParser.cleanThoughtForShow(raw);
+      expect(cleaned, '这是第一段分析。\n\n这是第二段分析。\n\n这是第三段分析。');
+    });
+
+    test('Markdown 标记剥离后依然保持段落空行结构与幂等', () {
+      const raw = '''
+### 第一阶段
+- 考虑主角动机与目标
+
+### 第二阶段
+`分析`局势走向与危机
+''';
+      final cleaned = ResponseParser.cleanThoughtForShow(raw);
+      expect(cleaned, contains('第一阶段\n· 考虑主角动机与目标\n\n第二阶段\n分析局势走向与危机'));
+      final twice = ResponseParser.cleanThoughtForShow(cleaned);
+      expect(twice, cleaned);
+    });
+  });
+
+  group('v1.3.4 · 提示词与 Token 缓冲及单幕目标字数 3000 上限', () {
+    test('PromptKernel.thinkingRule 去除矛盾表述并强调呈现思维链', () {
+      final rule = PromptKernel.thinkingRule;
+      expect(rule, isNot(contains('读者只会看到正文')));
+      expect(rule, contains('向读者呈现思维链'));
+      expect(rule, contains('简体中文'));
+      expect(rule, contains('单空行'));
+    });
+
+    test('LlmClient.calculateMaxTokens 支持 3000 字上限，分配充足缓冲 9000 tokens', () {
+      expect(LlmClient.calculateMaxTokens(3000), 9000);
+      expect(LlmClient.calculateMaxTokens(1200), 3600);
+      expect(LlmClient.calculateMaxTokens(500), 2048);
+    });
+
+    test('AppConfig 支持 3000 字并在 fromJson 与 copyWith 中 clamp 到 3000', () {
+      final cfg = AppConfig(maxWords: 3000);
+      expect(cfg.maxWords, 3000);
+
+      final json = cfg.toJson();
+      expect(json['maxWords'], 3000);
+
+      final restored = AppConfig.fromJson(json);
+      expect(restored.maxWords, 3000);
+
+      final overCfg = AppConfig.fromJson(<String, dynamic>{'maxWords': 5000});
+      expect(overCfg.maxWords, 3000);
+
+      final copy = cfg.copyWith(maxWords: 4000);
+      expect(copy.maxWords, 3000);
+
+      final directOver = AppConfig(maxWords: 9999);
+      expect(directOver.maxWords, 3000);
+
+      final directUnder = AppConfig(maxWords: 50);
+      expect(directUnder.maxWords, 200);
+    });
+
+    test('PromptKernel.build 在 3000 字时动态生成相应的字数下限约束 (2550 字)', () {
+      final kernel = PromptKernel.build(AppConfig(maxWords: 3000));
+      expect(kernel, contains('下限不得少于 2550 字')); // 3000 * 0.85 = 2550
+      expect(kernel, contains('目标 3000 字'));
+    });
+  });
+
+  group('v1.3.4 · 运行日志真实 API Key 精准脱敏与高效淘汰', () {
+    tearDown(() {
+      RuntimeLog.enabled = false;
+      RuntimeLog.verbose = false;
+      RuntimeLog.configuredApiKey = null;
+      RuntimeLog.clear();
+    });
+
+    test('配置的真实 API 密钥精准脱敏（支持无特殊前缀的自定义 Key）', () {
+      RuntimeLog.enabled = true;
+      RuntimeLog.configuredApiKey = 'custom-secret-key-xyz-987654';
+
+      RuntimeLog.i('Network', 'POST https://custom-ai.internal/v1/chat');
+      RuntimeLog.i('Auth', 'x-token: custom-secret-key-xyz-987654');
+
+      final dump = RuntimeLog.dump();
+      expect(dump, isNot(contains('custom-secret-key-xyz-987654')));
+      expect(dump, contains('[已脱敏]'));
+    });
+
+    test('超限淘汰保持上限 2000 条', () {
+      RuntimeLog.enabled = true;
+      for (var i = 0; i < 2050; i++) {
+        RuntimeLog.i('TAG', 'msg_$i');
+      }
+      expect(RuntimeLog.count, 2000);
+      expect(RuntimeLog.dump(), contains('msg_2049'));
+      expect(RuntimeLog.dump(), isNot(contains('msg_0 ')));
+    });
+  });
+
+  group('v1.3.4 · FallbackService 兜底顺序与通知保障', () {
+    test('三级兜底时 restart 先于 notice 发送，确保错误提示与降级通知不被抹除', () async {
+      final mock = _MockAlwaysFailClient();
+      final fb = FallbackService(mock);
+      final events = await fb.generate(
+        config: AppConfig(),
+        apiKey: 'dummy-key',
+        book: WorldBook(id: 'test_book', name: '测试世界', era: '1900', worldview: '背景', playerRole: '主角'),
+        history: const <ChapterNode>[],
+        playerAction: '拔剑迎战',
+      ).toList();
+
+      expect(events, isNotEmpty);
+      final kinds = events.map((e) => e.kind).toList();
+      expect(kinds, contains(GenEventKind.restart));
+      expect(kinds, contains(GenEventKind.notice));
+      expect(kinds, contains(GenEventKind.done));
+
+      // 检查倒数第三个是 restart，倒数第二个是 notice，最后一个是 done(degraded: true)
+      final lastThree = events.sublist(events.length - 3);
+      expect(lastThree[0].kind, GenEventKind.restart);
+      expect(lastThree[1].kind, GenEventKind.notice);
+      expect(lastThree[1].text, contains('换一个模型或换一家服务商'));
+      expect(lastThree[2].kind, GenEventKind.done);
+      expect(lastThree[2].degraded, isTrue);
+    });
+  });
 }
+
+class _MockAlwaysFailClient extends LlmClient {
+  @override
+  Stream<String> streamChat({
+    required AppConfig config,
+    required String apiKey,
+    required List<Map<String, String>> messages,
+    String workspaceId = '',
+  }) async* {
+    throw const AppError(AppErrorKind.refused, '模型回避了这一段的推演。');
+  }
+}
+
 

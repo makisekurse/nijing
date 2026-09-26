@@ -69,8 +69,15 @@ class RuntimeLog {
     RegExp(r'\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}'),
   ];
 
+  /// 当前配置的真实 API 密钥（用于精准脱敏）。
+  static String? configuredApiKey;
+
   static String redact(String s) {
     var out = s;
+    final configured = configuredApiKey?.trim();
+    if (configured != null && configured.length >= 4) {
+      out = out.replaceAll(configured, '[已脱敏]');
+    }
     for (final p in _secretPatterns) {
       out = out.replaceAll(p, '[已脱敏]');
     }
@@ -91,8 +98,8 @@ class RuntimeLog {
       msg = '${msg.substring(0, maxMessageChars)}…(+${msg.length - maxMessageChars})';
     }
     _buf.add(LogEntry(DateTime.now(), level, tag, msg));
-    while (_buf.length > maxEntries) {
-      _buf.removeAt(0);
+    if (_buf.length > maxEntries) {
+      _buf.removeRange(0, _buf.length - maxEntries);
     }
     revision.value++;
   }

@@ -65,7 +65,7 @@ class AppConfig {
     this.baseUrl = '',
     this.modelName = 'qwen3.8-flash',
     this.temperature = 0.85,
-    this.maxWords = 500,
+    int maxWords = 500,
     this.themeMode = 'mirage',
     this.fontSize = 'md',
     this.lineHeight = 1.9,
@@ -78,7 +78,7 @@ class AppConfig {
     this.enableThinking = true,
     this.logEnabled = false,
     this.verboseLog = false,
-  });
+  }) : maxWords = maxWords.clamp(200, 3000);
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'apiProvider': apiProvider,
@@ -105,7 +105,7 @@ class AppConfig {
         baseUrl: (json['baseUrl'] ?? '').toString(),
         modelName: (json['modelName'] ?? 'qwen3.8-flash').toString(),
         temperature: (json['temperature'] as num?)?.toDouble() ?? 0.85,
-        maxWords: (json['maxWords'] as num?)?.toInt() ?? 500,
+        maxWords: ((json['maxWords'] as num?)?.toInt() ?? 500).clamp(200, 3000),
         themeMode: (json['themeMode'] ?? 'mirage').toString(),
         fontSize: (json['fontSize'] ?? 'md').toString(),
         lineHeight: (json['lineHeight'] as num?)?.toDouble() ?? 1.9,
@@ -146,7 +146,7 @@ class AppConfig {
         baseUrl: baseUrl ?? this.baseUrl,
         modelName: modelName ?? this.modelName,
         temperature: temperature ?? this.temperature,
-        maxWords: maxWords ?? this.maxWords,
+        maxWords: (maxWords ?? this.maxWords).clamp(200, 3000),
         themeMode: themeMode ?? this.themeMode,
         fontSize: fontSize ?? this.fontSize,
         lineHeight: lineHeight ?? this.lineHeight,

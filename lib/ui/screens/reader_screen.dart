@@ -10,18 +10,15 @@ import '../../models/chapter_node.dart';
 import '../../models/save_slot.dart';
 import '../../models/world_line.dart';
 import '../../models/world_state.dart';
-import '../../services/chronicle_service.dart';
-import '../../services/fallback_service.dart';
 import '../../services/file_export_service.dart';
 import '../../services/game_session.dart';
-import '../../services/llm_client.dart';
+import '../../services/generation_controller.dart';
 import '../../services/response_parser.dart';
 import '../../services/save_service.dart';
 import '../../services/runtime_log.dart';
 import '../../services/story_export_service.dart';
 import '../../services/text_layout.dart';
 import '../../services/wakelock_service.dart';
-import '../../services/world_state_service.dart';
 import '../themes/app_theme.dart';
 import '../widgets/chapter_toc_sheet.dart';
 import '../widgets/choice_pill.dart';
@@ -57,7 +54,7 @@ class ReaderScreen extends StatefulWidget {
 class _ReaderScreenState extends State<ReaderScreen>
     with WidgetsBindingObserver {
   final ScrollController _scroll = ScrollController();
-  final LlmClient _client = LlmClient();
+  late GenerationController _controller;
 
   late AppConfig _config;
   late SaveSlot _slot;
@@ -103,7 +100,31 @@ class _ReaderScreenState extends State<ReaderScreen>
     _config = widget.config;
     _godMode = _config.godMode;
     _slot = widget.slot;
-    _session = GameSession(_slot);
+    _controller = GenerationController.forSlot(_slot.id);
+    if (_controller.isBusy) {
+      _session = _controller.session ?? GameSession(_slot);
+      _busy = true;
+      _pendingAction = _controller.pendingAction;
+      _live = _controller.live;
+      _notice = _controller.notice;
+      _noticeSticky = _controller.noticeSticky;
+      _degraded = _controller.degraded;
+    } else if (_controller.session != null) {
+      _slot = _controller.lastSavedSlot ?? _slot;
+      _session = _controller.session!;
+      _notice = _controller.notice;
+      _noticeSticky = _controller.noticeSticky;
+      _degraded = _controller.degraded;
+    } else if (_controller.lastSavedSlot != null) {
+      _slot = _controller.lastSavedSlot!;
+      _session = GameSession(_slot);
+      _notice = _controller.notice;
+      _noticeSticky = _controller.noticeSticky;
+      _degraded = _controller.degraded;
+    } else {
+      _session = GameSession(_slot);
+    }
+    _controller.addListener(_onControllerUpdate);
     _scroll.addListener(_onScroll);
     _enterImmersive();
     _scheduleHeaderHide();
@@ -112,12 +133,25 @@ class _ReaderScreenState extends State<ReaderScreen>
     _maybeJumpToLatest();
   }
 
+  void _onControllerUpdate() {
+    if (!mounted) return;
+    setState(() {
+      _busy = _controller.isBusy;
+      _pendingAction = _controller.pendingAction;
+      _live = _controller.live;
+      _notice = _controller.notice;
+      _noticeSticky = _controller.noticeSticky;
+      _degraded = _controller.degraded;
+    });
+    _follow();
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     WakelockService.disable();
     _headerTimer?.cancel();
-    _client.cancel();
+    _controller.removeListener(_onControllerUpdate);
     _scroll.dispose();
     _inputController.dispose();
     _inputFocusNode.dispose();
@@ -305,17 +339,10 @@ class _ReaderScreenState extends State<ReaderScreen>
   // 除了让人等之外没有实际价值，还额外引入一个 16ms 定时器与「跳过」状态。
   // 现在模型吐多少就显示多少。
 
-  void _feed(String chunk) {
-    setState(() => _live += chunk);
-    _follow();
-  }
-
   /// 丢掉当前这一轮的流式结果，从零重来。
-  ///
-  /// 重试 / 降级 / 中止都会走到这里 —— 不清空的话，上一轮不合格的残文
-  /// 会和新一轮内容叠在一起（实机反复出现过的症状）。
   void _resetLive() {
     _live = '';
+    _controller.reset();
   }
 
   // ---------- 生成 ----------
@@ -323,119 +350,29 @@ class _ReaderScreenState extends State<ReaderScreen>
   Future<void> _act(String action, {bool? godMode}) async {
     if (_busy) return;
     final isGod = godMode ?? _godMode;
-    setState(() {
-      _busy = true;
-      _pendingAction = action;
-      _resetLive();
-      _session.clearChoices();
-      _notice = '';
-      _noticeSticky = false;
-      _degraded = false;
-    });
+    if (_apiKey.isEmpty) {
+      await _loadApiKey();
+    }
     _atBottom = true;
     _follow();
 
-    ParsedChapter? parsed;
-    var degraded = false;
-
-    final stream = FallbackService(_client).generate(
+    await _controller.startGeneration(
+      session: _session,
       config: _config,
       apiKey: _apiKey,
+      action: action,
       book: _slot.worldBook,
-      history: _history,
-      playerAction: action,
-      chronicle: _chronicle,
-      worldState: WorldStateService.renderForPrompt(_worldState),
       godMode: isGod,
     );
-
-    await for (final ev in stream) {
-        if (!mounted) return;
-        switch (ev.kind) {
-          case GenEventKind.delta:
-            _feed(ev.text);
-            break;
-          case GenEventKind.notice:
-            setState(() {
-              _notice = ev.text;
-              _noticeSticky = false;
-            });
-            break;
-          case GenEventKind.restart:
-            setState(_resetLive);
-            break;
-          case GenEventKind.done:
-            parsed = ev.chapter;
-            degraded = ev.degraded;
-            break;
-          case GenEventKind.failed:
-            setState(() {
-              _notice = ev.text;
-              _noticeSticky = true;
-            });
-            break;
-        }
-      }
-
-    final p = parsed;
-    if (p != null) {
-      setState(() {
-        // 合并世界状态、写入本幕快照，全在 GameSession 里完成
-        _session.appendChapter(
-          content: p.body,
-          playerAction: action,
-          date: p.date,
-          choices: p.choices,
-          glossary: p.glossary,
-          cast: p.cast,
-          rawOutput: p.rawOutput,
-          stateRaw: p.stateRaw,
-          thought: p.thought,
-          godMode: isGod,
-        );
-        _resetLive();
-        _pendingAction = '';
-        _busy = false;
-        _degraded = degraded;
-        // 章节落定 = 过程提示全部作废。只有降级这种终态才留一句话。
-        _notice = degraded ? '本幕未能取得模型响应，已进入本地降级，可重新生成本幕。' : '';
-        _noticeSticky = degraded;
-      });
-      await _persist();
-      await _maybeCompressChronicle();
-    } else {
-      setState(() {
-        _busy = false;
-        _resetLive();
-        _pendingAction = '';
-      });
+    if (mounted) {
+      _follow();
     }
-    _follow();
   }
 
   String _apiKey = '';
 
   Future<void> _persist() async {
     await SaveService.upsert(_session.toSlot());
-  }
-
-  Future<void> _maybeCompressChronicle() async {
-    if (!ChronicleService.shouldCompress(_history.length)) return;
-    if (_apiKey.trim().isEmpty) return;
-    final updated = await ChronicleService.compress(
-      config: _config,
-      apiKey: _apiKey,
-      book: _slot.worldBook,
-      previousChronicle: _chronicle,
-      history: _history,
-    );
-    if (!mounted) return;
-    if (updated != _chronicle) {
-      // 把新摘要记到最后一幕的快照上，这样以后回滚到这一幕时
-      // 能恢复到正确的编年史，而不是「未来」的版本。
-      setState(() => _session.attachChronicle(updated));
-      await _persist();
-    }
   }
 
   /// 重新生成当前这一幕。
@@ -574,14 +511,7 @@ class _ReaderScreenState extends State<ReaderScreen>
   }
 
   void _cancel() {
-    _client.cancel();
-    setState(() {
-      _busy = false;
-      _resetLive();
-      _pendingAction = '';
-      _notice = '已中止本次推演。';
-      _noticeSticky = true;
-    });
+    _controller.cancel();
   }
 
   // ---------- 界面 ----------
@@ -1884,13 +1814,14 @@ class _ReaderScreenState extends State<ReaderScreen>
 
   Widget _liveView(ThemeData theme, double fontSize) {
     final palette = AppTheme.readingOf(context);
-    // 思考块不丢弃 —— 拆出来单独显示。旧版直接 stripForPreview 全剥掉，
-    // 于是整个思考阶段只能显示一句「推演思考中…」，用户什么都看不到。
+    // 思考块不丢弃 —— 拆出来单独显示。
+    // 推演进行期间只要有思考，思考面板全程常驻在正文上方，用户展开后绝不自动关闭；
+    // 本幕完成后平滑过渡到章节菜单的思维链查看。
     final (thought, preview) = ResponseParser.splitLive(_live);
-    final showThought = preview.isEmpty && thought.isNotEmpty;
+    final hasThought = thought.isNotEmpty;
     final statusText = _degraded
         ? '本地降级中…'
-        : (showThought ? '推演思考中…' : '推演中…');
+        : (preview.isEmpty && hasThought ? '推演思考中…' : '推演中…');
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1921,7 +1852,13 @@ class _ReaderScreenState extends State<ReaderScreen>
             ],
           ),
         ),
-        if (showThought) LiveThoughtView(thought: thought),
+        if (hasThought)
+          LiveThoughtView(
+            key: const ValueKey('live_thought_view'),
+            thought: thought,
+            initialExpanded: _controller.thoughtExpanded,
+            onExpansionChanged: (v) => _controller.thoughtExpanded = v,
+          ),
         if (preview.isNotEmpty)
           _paragraph(preview, fontSize: fontSize, color: palette.ink),
       ],
