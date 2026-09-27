@@ -449,6 +449,73 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _config.enableThinking,
         (v) => _apply(_config.copyWith(enableThinking: v), immediate: true),
       ),
+      if (_config.enableThinking) ...<Widget>[
+        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  Text(
+                    '思考预算',
+                    style: TextStyle(
+                      fontSize: 13.5,
+                      color: theme.colorScheme.onSurface,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    _thinkingBudgetShortLabel(_config.thinkingBudget),
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: theme.colorScheme.primary,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: const <List<String>>[
+                  <String>['0', '自由不限'],
+                  <String>['1024', '轻度 (1k)'],
+                  <String>['2048', '标准 (2k)'],
+                  <String>['4096', '深度 (4k)'],
+                  <String>['8192', '极深 (8k)'],
+                ]
+                    .map(
+                      (opt) => _chip(
+                        theme,
+                        label: opt[1],
+                        selected: '${_config.thinkingBudget}' == opt[0],
+                        onTap: () => _apply(
+                          _config.copyWith(
+                            thinkingBudget: int.tryParse(opt[0]) ?? 0,
+                          ),
+                          immediate: true,
+                        ),
+                        compact: true,
+                      ),
+                    )
+                    .toList(),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                _thinkingBudgetDesc(_config.thinkingBudget),
+                style: TextStyle(
+                  fontSize: 11.5,
+                  height: 1.5,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
       const SizedBox(height: 14),
 
       if (_config.apiProvider == 'custom') ...<Widget>[
@@ -840,4 +907,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ],
       );
+
+  String _thinkingBudgetShortLabel(int budget) {
+    switch (budget) {
+      case 1024:
+        return '轻度 · 1024';
+      case 2048:
+        return '标准 · 2048';
+      case 4096:
+        return '深度 · 4096';
+      case 8192:
+        return '极深 · 8192';
+      case 0:
+      default:
+        return '自由不限';
+    }
+  }
+
+  String _thinkingBudgetDesc(int budget) {
+    switch (budget) {
+      case 1024:
+        return '轻度（1024 tokens）：限制较短思考，适合快速推演';
+      case 2048:
+        return '标准（2048 tokens）：适中思考预算，兼顾深度与响应速度';
+      case 4096:
+        return '深度（4096 tokens）：充裕思考空间，适合复杂剧情推演';
+      case 8192:
+        return '极深（8192 tokens）：最大推理深度，适合宏大格局多线权衡';
+      case 0:
+      default:
+        return '自由不限（默认推荐）：不设预算限制，让模型尽情推演';
+    }
+  }
 }

@@ -1958,11 +1958,24 @@ final x = 1;
       expect(p.choices.length, 2);
     });
 
-    test('流式 splitLive 对未闭合 think 自然叙事正文实时分流', () {
+    test('流式 splitLive 对未闭合 think 零泄漏：中途无结构标签与正文标识时100%归入 thought，body 为空', () {
       const raw = '<think>思考推演中\n\n大雪纷飞，寒风呼啸。林远推开了客栈的大门。';
       final (thought, body) = ResponseParser.splitLive(raw);
-      expect(thought, '思考推演中');
-      expect(body, '大雪纷飞，寒风呼啸。林远推开了客栈的大门。');
+      expect(thought, contains('思考推演中'));
+      expect(thought, contains('大雪纷飞，寒风呼啸。林远推开了客栈的大门。'));
+      expect(body, '');
+    });
+
+    test('流式 splitLive 对未闭合 think 后出现结构标签或显式正文标识时正常切出', () {
+      const rawDate = '<think>思考推演中\n<date>元丰三年</date>\n大雪纷飞，寒风呼啸。林远推开了客栈的大门。';
+      final (thoughtDate, bodyDate) = ResponseParser.splitLive(rawDate);
+      expect(thoughtDate, '思考推演中');
+      expect(bodyDate, '大雪纷飞，寒风呼啸。林远推开了客栈的大门。');
+
+      const rawExplicit = '<think>思考推演中\n\n【正文】\n大雪纷飞，寒风呼啸。林远推开了客栈的大门。';
+      final (thoughtExp, bodyExp) = ResponseParser.splitLive(rawExplicit);
+      expect(thoughtExp, '思考推演中');
+      expect(bodyExp, '大雪纷飞，寒风呼啸。林远推开了客栈的大门。');
     });
 
     test('未闭合 think 后接短句氛围开篇（如「夜色深沉。」）：短句绝不被吞入思考', () {
@@ -2472,6 +2485,155 @@ final x = 1;
       expect(p.body, contains('上海市委大楼的门外'));
       expect(p.choices.length, 2);
     });
+
+    group('v1.3.8 · 思考预算控制、流式零泄漏与网络残文抢救', () {
+      test('AppConfig · thinkingBudget 字段、默认值与序列化往返', () {
+        final def = AppConfig();
+        expect(def.thinkingBudget, 0);
+
+        final json = def.toJson();
+        expect(json['thinkingBudget'], 0);
+
+        final custom = AppConfig.fromJson(<String, dynamic>{
+          ...json,
+          'thinkingBudget': 2048,
+        });
+        expect(custom.thinkingBudget, 2048);
+
+        final copied = custom.copyWith(thinkingBudget: 4096);
+        expect(copied.thinkingBudget, 4096);
+      });
+
+      test('LlmClient.calculateMaxTokens · 深度思考模式顶格保持在 12288 ~ 16384', () {
+        final lowWords =
+            LlmClient.calculateMaxTokens(200, enableThinking: true);
+        expect(lowWords, 12288);
+
+        final standardWords =
+            LlmClient.calculateMaxTokens(500, enableThinking: true);
+        expect(standardWords, 12288);
+
+        final highWords =
+            LlmClient.calculateMaxTokens(3000, enableThinking: true);
+        expect(highWords, 15000);
+
+        final extremeWords =
+            LlmClient.calculateMaxTokens(4000, enableThinking: true);
+        expect(extremeWords, 16384);
+      });
+
+      test('ResponseParser.splitLive · 未闭合 think 零泄漏（无下一结构标签或正文前缀时全文归思考，正文为空）', () {
+        const raw = '<think>思考第一行\n思考第二行\n\n大雪纷飞，林远踏上山道。';
+        final (thought, body) = ResponseParser.splitLive(raw);
+        expect(thought, contains('思考第一行'));
+        expect(thought, contains('大雪纷飞，林远踏上山道。'));
+        expect(body, '');
+      });
+
+      test('ResponseParser.splitLive · 未闭合 think 后出现结构标签或显式正文标识时立即切出', () {
+        const rawWithDate =
+            '<think>思考推演中\n<date>正统十四年</date>\n残阳如血，塞外狂风席卷着黄沙。';
+        final (thought1, body1) = ResponseParser.splitLive(rawWithDate);
+        expect(thought1, '思考推演中');
+        expect(body1, '残阳如血，塞外狂风席卷着黄沙。');
+
+        const rawWithExplicit = '<think>思考推演完毕\n\n【正文】\n城楼之上，黑云压城城欲摧。';
+        final (thought2, body2) = ResponseParser.splitLive(rawWithExplicit);
+        expect(thought2, '思考推演完毕');
+        expect(body2, '城楼之上，黑云压城城欲摧。');
+      });
+
+      test('FallbackService · 网络中断残文抢救 (Salvage)：含 date 且正文 >= 200 字时直接结算并补齐选项',
+          () async {
+        final mockClient = _MockNetworkInterruptWithPartialChapterClient();
+        final fallback = FallbackService(mockClient);
+        final book = WorldBook(
+          id: 'test',
+          name: '测试世界',
+          era: '建中元年',
+          openingScene: '序幕正文',
+          openingChoices: <String>['行动1', '行动2'],
+        );
+
+        final events = await fallback.generate(
+          config: AppConfig(),
+          apiKey: 'test-key',
+          book: book,
+          history: <ChapterNode>[],
+          playerAction: '推门而入',
+        ).toList();
+
+        final doneEvents =
+            events.where((e) => e.kind == GenEventKind.done).toList();
+        expect(doneEvents.length, 1);
+        final chapter = doneEvents.first.chapter!;
+        expect(chapter.body.length, greaterThanOrEqualTo(200));
+        expect(chapter.date, '建中元年冬');
+        expect(chapter.choices.length, greaterThanOrEqualTo(2));
+      });
+
+      test('FallbackService · 网络错误重试严禁注入 retryNudge 训诫提示词', () async {
+        final mockClient = _MockNetworkFailAlwaysClient();
+        final fallback = FallbackService(mockClient);
+        final book = WorldBook(
+          id: 'test',
+          name: '测试世界',
+          era: '建中元年',
+          openingScene: '序幕正文',
+          openingChoices: <String>['行动1', '行动2'],
+        );
+
+        final events = await fallback.generate(
+          config: AppConfig(),
+          apiKey: 'test-key',
+          book: book,
+          history: <ChapterNode>[],
+          playerAction: '继续前进',
+        ).toList();
+
+        final failedEvents =
+            events.where((e) => e.kind == GenEventKind.failed).toList();
+        expect(failedEvents.isNotEmpty, isTrue);
+
+        // 验证收到的 3 轮请求中，系统提示词绝不包含任何 retryNudge 训诫内容
+        expect(mockClient.receivedMessages.length, 3);
+        for (final reqMessages in mockClient.receivedMessages) {
+          final sys = reqMessages.first['content'] ?? '';
+          expect(sys, isNot(contains('【指令约束】')));
+          expect(sys, isNot(contains('【紧急约束】')));
+          expect(sys, isNot(contains('不要评价')));
+        }
+      });
+
+      test('FallbackService · 网络故障重试耗尽时严禁生成虚假本地降级章节', () async {
+        final mockClient = _MockNetworkFailAlwaysClient();
+        final fallback = FallbackService(mockClient);
+        final book = WorldBook(
+          id: 'test',
+          name: '测试世界',
+          era: '建中元年',
+          openingScene: '序幕正文',
+          openingChoices: <String>['行动1', '行动2'],
+        );
+
+        final events = await fallback.generate(
+          config: AppConfig(),
+          apiKey: 'test-key',
+          book: book,
+          history: <ChapterNode>[],
+          playerAction: '推演行动',
+        ).toList();
+
+        // 绝不输出 done(degraded: true)
+        final doneEvents =
+            events.where((e) => e.kind == GenEventKind.done).toList();
+        expect(doneEvents, isEmpty);
+        final failedEvents =
+            events.where((e) => e.kind == GenEventKind.failed).toList();
+        expect(failedEvents.length, 1);
+        expect(failedEvents.first.text, contains('网络连接中断'));
+      });
+    });
   });
 }
 
@@ -2499,6 +2661,40 @@ class _Mock400AuthFailClient extends LlmClient {
       400,
       '{"code":"InvalidParameter","message":"Range of max_tokens should be [1, 2000]"}',
     );
+  }
+}
+
+class _MockNetworkInterruptWithPartialChapterClient extends LlmClient {
+  @override
+  Stream<String> streamChat({
+    required AppConfig config,
+    required String apiKey,
+    required List<Map<String, String>> messages,
+    String workspaceId = '',
+  }) async* {
+    yield '<date>建中元年冬</date>\n\n';
+    yield '林远踏入风雪客栈。堂内火炉噼啪作响，店小二热情地迎上前来：“客官打尖还是住店？”'
+        '林远解下披风，拍去上面的积雪，环顾四周。客栈角落里坐着几名按刀的行商，目光阴郁；'
+        '柜台后的掌柜拨弄着算盘，神色警惕。风雪撞击着窗棂，夜色愈发深沉。远处的山道上隐隐传来阵阵狼嗥，'
+        '似乎今夜注定不太平静。他缓缓走向大堂中央的空桌，心中暗自盘算着接下来的去向与接头暗号。'
+        '门外的风声愈发尖锐，夹杂着马蹄的踏雪声，由远及近。林远按住腰间长剑，屏息凝神，等待着来客踏入客栈门槛的那一刻。';
+    throw const AppError(AppErrorKind.network, '网络数据流意外中断');
+  }
+}
+
+class _MockNetworkFailAlwaysClient extends LlmClient {
+  final List<List<Map<String, String>>> receivedMessages =
+      <List<Map<String, String>>>[];
+
+  @override
+  Stream<String> streamChat({
+    required AppConfig config,
+    required String apiKey,
+    required List<Map<String, String>> messages,
+    String workspaceId = '',
+  }) async* {
+    receivedMessages.add(List<Map<String, String>>.from(messages));
+    throw const AppError(AppErrorKind.network, '连接模型服务超时，网络连接断开。');
   }
 }
 

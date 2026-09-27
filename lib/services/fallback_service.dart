@@ -86,6 +86,7 @@ class FallbackService {
     );
 
     AppError? lastError;
+    var contractNudgeCount = 0;
 
     for (var attempt = 0; attempt <= _maxNudge; attempt++) {
       if (client.isCancelled) {
@@ -97,11 +98,20 @@ class FallbackService {
         // 先让 UI 丢掉落选的那一轮残文，再报「正在重试」——
         // 顺序不能反，否则旧残文会和新内容叠在一起。
         yield const GenEvent.restart();
-        yield GenEvent.notice('输出未满足契约，正在改写重试（第 $attempt 次）…');
+        if (contractNudgeCount > 0) {
+          yield GenEvent.notice('输出未满足契约，正在改写重试（第 $attempt 次）…');
+        } else {
+          yield GenEvent.notice('网络波动中断，正在重新连接重试（第 $attempt 次）…');
+        }
       }
       RuntimeLog.i('Fallback', '尝试 ${attempt + 1}/${_maxNudge + 1}');
 
-      final nudge = PromptBuilder.retryNudge(attempt);
+      // 网络中断严禁注入 retryNudge 训诫提示词：
+      // 只有当判定为契约违背（如缺少 choices）或拒答时才注入 retryNudge；
+      // 对于网络超时/断开重试，严禁拼接任何 retryNudge！
+      final nudge = contractNudgeCount > 0
+          ? PromptBuilder.retryNudge(contractNudgeCount)
+          : '';
       final messages = PromptBuilder.buildMessages(
         systemPrompt: systemPrompt + nudge,
         history: history,
@@ -137,6 +147,44 @@ class FallbackService {
         lastError = e;
         RuntimeLog.w('Fallback', '第 ${attempt + 1} 轮抛出：'
             '${e.kind.name} · ${e.message}${e.detail == null ? '' : ' · ${e.detail}'}');
+
+        // 断连残文抢救机制 (Salvage)：
+        // 当网络断开或异常时，若当前已接收的 buffer 包含剧中日期 <date> 且小说正文已达 200 字以上，
+        // 执行残文抢救：调用 ResponseParser.parse 解析现有正文，自动补齐默认可选行动分支（如缺少 <choices>），
+        // 直接结算为当前幕并持久化保存，绝不让生成成果化为乌有。
+        final rawSoFar = buffer.toString();
+        final candidate = ResponseParser.parse(rawSoFar);
+        final hasDate = candidate.date.isNotEmpty ||
+            RegExp(r'[<＜《]\s*date\s*[>＞》]', caseSensitive: false)
+                .hasMatch(rawSoFar);
+        if (hasDate && candidate.body.trim().length >= 200) {
+          RuntimeLog.i('Fallback',
+              '网络异常但正文充足（${candidate.body.trim().length} 字，含 date），启动残文抢救 (Salvage)');
+          final choices = List<String>.from(candidate.choices);
+          if (choices.isEmpty) {
+            choices.addAll(<String>[
+              '继续深入探查眼下局势',
+              '按兵不动，静观其变',
+            ]);
+          } else if (choices.length == 1) {
+            choices.add('按兵不动，静观其变');
+          }
+          final salvaged = ParsedChapter(
+            body: candidate.body,
+            date: candidate.date,
+            choices: choices,
+            glossary: candidate.glossary,
+            cast: candidate.cast,
+            stateRaw: candidate.stateRaw,
+            thought: candidate.thought,
+            rawOutput: rawSoFar,
+          );
+          yield const GenEvent.notice('网络连接中断，已成功抢救并保存推演正文。');
+          yield GenEvent.done(salvaged);
+          return;
+        }
+
+        // 仅在完全没有有效正文时才重试，重试时发出友好提示
         if (e.retryable && attempt < _maxNudge) {
           if (buffer.isNotEmpty) yield const GenEvent.restart();
           yield GenEvent.notice('${e.message} 正在重试…');
@@ -151,6 +199,7 @@ class FallbackService {
           AppErrorKind.refused,
           '模型回避了这一段的推演。',
         );
+        contractNudgeCount++;
         if (attempt < _maxNudge) {
           yield const GenEvent.restart();
           yield const GenEvent.notice('模型回避了这一段的推演，正在改写重试…');
@@ -171,6 +220,7 @@ class FallbackService {
 
       if (parsed.body.trim().isEmpty) {
         lastError = const AppError(AppErrorKind.refused, '模型返回了空内容。');
+        contractNudgeCount++;
         if (attempt < _maxNudge) {
           yield const GenEvent.restart();
           yield const GenEvent.notice('模型返回了空内容，正在重试…');
@@ -178,10 +228,40 @@ class FallbackService {
         continue;
       }
       if (!parsed.hasUsableChoices) {
+        // 残文抢救检测：若包含剧中日期 <date> 且小说正文已达 200 字以上，执行残文抢救，自动补齐分支直接结算！
+        final hasDate = parsed.date.isNotEmpty ||
+            RegExp(r'[<＜《]\s*date\s*[>＞》]', caseSensitive: false).hasMatch(raw);
+        if (hasDate && parsed.body.trim().length >= 200) {
+          RuntimeLog.i('Fallback',
+              '输出缺少分支但正文充足（${parsed.body.trim().length} 字，含 date），执行残文抢救自动补齐分支');
+          final choices = List<String>.from(parsed.choices);
+          if (choices.isEmpty) {
+            choices.addAll(<String>[
+              '继续深入探查眼下局势',
+              '按兵不动，静观其变',
+            ]);
+          } else if (choices.length == 1) {
+            choices.add('按兵不动，静观其变');
+          }
+          final salvaged = ParsedChapter(
+            body: parsed.body,
+            date: parsed.date,
+            choices: choices,
+            glossary: parsed.glossary,
+            cast: parsed.cast,
+            stateRaw: parsed.stateRaw,
+            thought: parsed.thought,
+            rawOutput: raw,
+          );
+          yield GenEvent.done(salvaged);
+          return;
+        }
+
         lastError = const AppError(
           AppErrorKind.truncated,
           '输出缺少决断分支（<choices>）。',
         );
+        contractNudgeCount++;
         if (attempt < _maxNudge) {
           yield const GenEvent.restart();
           yield const GenEvent.notice('输出缺少决断分支，正在重试…');
@@ -198,11 +278,22 @@ class FallbackService {
         const AppError(AppErrorKind.unknown, '生成失败，原因未知。');
     RuntimeLog.e('Fallback', '兜底处理：${err.kind.name} · ${err.message}');
 
-    // 关键修复：参数/认证非法（400 Bad Request、401/403 密钥无效等）属于配置与端点校验失败，
+    // 关键修复 1：参数/认证非法（400 Bad Request、401/403 密钥无效等）属于配置与端点校验失败，
     // 必须直接以 failed 中止推演并保留原有备选分支，严禁插入虚假降级章节污染用户存档。
     if (err.kind == AppErrorKind.auth) {
       yield const GenEvent.restart();
       yield GenEvent.failed(err.message);
+      return;
+    }
+
+    // 关键修复 2：网络故障（超时、断开等 AppErrorKind.network）重试耗尽时，
+    // 严禁生成本地降级章节覆盖用户存档槽！
+    // 必须以 GenEvent.failed 抛出，保留用户的备选分支与槽位现场，允许用户网络恢复后继续。
+    if (err.kind == AppErrorKind.network) {
+      yield const GenEvent.restart();
+      yield GenEvent.failed(
+        '${err.message}\n网络连接中断且多次重试未果，已保留当前进度与选项现场。请检查网络后点击选项继续推演。',
+      );
       return;
     }
 

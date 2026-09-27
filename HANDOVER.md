@@ -1,4 +1,4 @@
-# 拟境 · 全量技术交接与架构文档（2026-09-27 · v1.3.7）
+# 拟境 · 全量技术交接与架构文档（2026-09-27 · v1.3.8）
 
 > **更新时间**：2026-09-27  
 > **开源仓库**：https://github.com/makisekurse/nijing （公开仓库）  
@@ -16,8 +16,8 @@
 - **应用零内置剧本**：时代背景、主角身份、关键人物、文风规则全部由外部「世界书」定义；
 - **包名**：`io.github.makisekurse.nijing`
 - **开发者署名**：`makisekurisu`（遵循用户严格要求，仅署此名）
-- **当前版本**：`v1.3.7+1`
-- **基线单测**：**164 项单元测试 100% 全绿（运行耗时 ~1 秒）**
+- **当前版本**：`v1.3.8+1`
+- **基线单测**：**172 项单元测试 100% 全绿（运行耗时 ~1 秒）**
 
 ---
 
@@ -176,18 +176,18 @@ flutter build apk --release --target-platform android-arm64
 
 ### 3. GitHub Actions 自动发版
 仓库通过 `.github/workflows/android.yml` 自动化出包：
-1. 更新 `pubspec.yaml` 版本号（如 `1.3.7+1`）；
+1. 更新 `pubspec.yaml` 版本号（如 `1.3.8+1`）；
 2. 更新 `README.md` 与本文档；
 3. 提交并推送到 GitHub 主干：
    ```powershell
    git add .
-   git commit -m "feat: 你的改动说明 (v1.3.7)"
+   git commit -m "feat: 你的改动说明 (v1.3.8)"
    git push origin main
    ```
 4. 打标签并推送触发发版：
    ```powershell
-   git tag -a v1.3.7 -m "v1.3.7 详细改动"
-   git push origin v1.3.7
+   git tag -a v1.3.8 -m "v1.3.8 详细改动"
+   git push origin v1.3.8
    ```
 5. GitHub Actions 自动构建并在 Releases 页面生成对应的发布产物。
 
@@ -197,12 +197,12 @@ flutter build apk --release --target-platform android-arm64
 
 | 模块 | 核心文件 | 关键职责 |
 |---|---|---|
-| **推演控制** | `lib/services/generation_controller.dart` | 独立生命周期控制器、状态机、后台落盘 |
-| **状态演算** | `lib/services/game_session.dart` | 分岔逻辑、世界线切换、快照自愈、选项恢复 |
-| **输出解析** | `lib/services/response_parser.dart` | 结构化标签提取、未闭合 think 智能截断、思维防外泄 |
-| **网络调用** | `lib/services/llm_client.dart` | SSE 流式通信、reasoning 流提取、16384 Token 预算 |
+| **推演控制** | `lib/services/generation_controller.dart` | 独立生命周期控制器、状态机、后台落盘、残文抢救 |
+| **状态演算** | `lib/services/game_session.dart` | 分岔逻辑、世界线切换、快照自愈、重卷、选项恢复 |
+| **输出解析** | `lib/services/response_parser.dart` | 结构化标签提取、未闭合 think 零泄漏与智能截断、思维防外泄 |
+| **网络调用** | `lib/services/llm_client.dart` | SSE 头部补全、心跳检测（20s 超时）、浮点清洗、thinking_budget 透传 |
 | **模型调度** | `lib/services/providers.dart` | 服务商 Base URL 解析、模型名智能自愈、参数隔离 |
 | **阅读界面** | `lib/ui/screens/reader_screen.dart` | 沉浸阅读视口、触摸手势防打架、视口停泊 |
 | **思考面板** | `lib/ui/widgets/live_thought_view.dart` | 常驻思考展示、折叠保持、独立划动感知 |
 | **世界线树** | `lib/ui/widgets/world_line_tree.dart` | 时空树可视化、卡片严密对齐、文本防溢出 |
-| **单测套件** | `test/nijing_test.dart` | 164 项全量测试集 |
+| **单测套件** | `test/nijing_test.dart` | 172 项全量测试集 |

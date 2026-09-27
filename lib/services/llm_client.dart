@@ -109,7 +109,7 @@ class LlmClient {
     if (enableThinking) {
       // 深度思考模式：思考过程 + 正文双重空间保障，彻底避免交接处撞墙超时切断
       final calculated = math.max(12288, maxWords * 5);
-      return calculated.clamp(4096, 16384);
+      return calculated.clamp(12288, 16384);
     }
 
     return (maxWords * 3).clamp(2048, 16384);
@@ -127,11 +127,13 @@ class LlmClient {
         : config.modelName.trim();
     final model = Providers.normalizeModelName(rawModel);
 
+    final cleanTemperature =
+        double.parse(config.temperature.toStringAsFixed(2));
     final body = <String, dynamic>{
       'model': model,
       'messages': messages,
       'stream': true,
-      'temperature': config.temperature,
+      'temperature': cleanTemperature,
       'max_tokens': calculateMaxTokens(
         config.maxWords,
         modelName: model,
@@ -146,17 +148,17 @@ class LlmClient {
       apiProvider: config.apiProvider,
       modelName: model,
     )) {
-      if (config.enableThinking) {
-        body['enable_thinking'] = true;
-      } else {
-        body['enable_thinking'] = false;
+      body['enable_thinking'] = config.enableThinking;
+      if (config.enableThinking && config.thinkingBudget > 0) {
+        body['thinking_budget'] = config.thinkingBudget;
       }
     }
 
     RuntimeLog.i(
       'LLM',
-      '请求 ${body['model']} · thinking=${body['enable_thinking'] ?? '默认'} · '
-      'temperature=${config.temperature} · max_tokens=${body['max_tokens']} · '
+      '请求 ${body['model']} · thinking=${body['enable_thinking'] ?? '默认'}'
+      '${body.containsKey('thinking_budget') ? ' (budget=${body['thinking_budget']})' : ''} · '
+      'temperature=$cleanTemperature · max_tokens=${body['max_tokens']} · '
       '消息 ${messages.length} 条 / ${messages.fold<int>(0, (a, m) => a + (m['content']?.length ?? 0))} 字',
     );
 
@@ -164,6 +166,9 @@ class LlmClient {
     request.headers['Authorization'] = 'Bearer ${apiKey.trim()}';
     request.headers['Content-Type'] = 'application/json';
     request.headers['Accept'] = 'text/event-stream';
+    request.headers['Cache-Control'] = 'no-cache';
+    request.headers['Connection'] = 'keep-alive';
+    request.headers['Accept-Encoding'] = 'identity';
     request.body = jsonEncode(body);
 
     final client = http.Client();
@@ -202,6 +207,15 @@ class LlmClient {
     }
 
     final lines = response.stream
+        .timeout(
+          const Duration(seconds: 20),
+          onTimeout: (sink) => sink.addError(
+            const AppError(
+              AppErrorKind.network,
+              '流式数据接收超时（超过 20 秒无数据帧），网络连接可能已中断。',
+            ),
+          ),
+        )
         .transform(utf8.decoder)
         .transform(const LineSplitter());
 
@@ -279,6 +293,14 @@ class LlmClient {
       }
     } on AppError {
       rethrow;
+    } on TimeoutException {
+      if (_cancelled) {
+        throw const AppError(AppErrorKind.cancelled, '已中止。');
+      }
+      throw const AppError(
+        AppErrorKind.network,
+        '流式数据接收超时（超过 20 秒无数据帧），网络连接可能已中断。',
+      );
     } catch (e) {
       if (_cancelled) {
         throw const AppError(AppErrorKind.cancelled, '已中止。');

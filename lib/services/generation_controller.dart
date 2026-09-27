@@ -154,7 +154,7 @@ class GenerationController extends ChangeNotifier {
         return;
       }
 
-      final p = parsed;
+      final p = parsed ?? _trySalvageLive();
       if (p != null) {
         session.appendChapter(
           content: p.body,
@@ -172,6 +172,10 @@ class GenerationController extends ChangeNotifier {
         pendingAction = '';
         degraded = wasDegraded;
         status = GenerationStatus.completed;
+        if (parsed == null) {
+          notice = '网络连接中断，已成功抢救并保存推演正文。';
+          noticeSticky = true;
+        }
 
         // 后台推演完成后自动写入存档
         final slot = session.toSlot();
@@ -221,6 +225,33 @@ class GenerationController extends ChangeNotifier {
         return;
       }
       RuntimeLog.e('GenerationController', '[$slotId] 推演发生未捕获异常: $e');
+
+      final salvaged = _trySalvageLive();
+      if (salvaged != null && this.session != null) {
+        this.session!.appendChapter(
+          content: salvaged.body,
+          playerAction: action,
+          date: salvaged.date,
+          choices: salvaged.choices,
+          glossary: salvaged.glossary,
+          cast: salvaged.cast,
+          rawOutput: salvaged.rawOutput,
+          stateRaw: salvaged.stateRaw,
+          thought: salvaged.thought,
+          godMode: godMode,
+        );
+        live = '';
+        pendingAction = '';
+        status = GenerationStatus.completed;
+        notice = '推演发生异常中断，但已成功抢救并保存推演正文。';
+        noticeSticky = true;
+        final slot = this.session!.toSlot();
+        await SaveService.upsert(slot);
+        lastSavedSlot = slot;
+        notifyListeners();
+        return;
+      }
+
       status = GenerationStatus.failed;
       notice = '推演发生异常：$e';
       noticeSticky = true;
@@ -231,6 +262,36 @@ class GenerationController extends ChangeNotifier {
       }
       notifyListeners();
     }
+  }
+
+  /// 残文抢救检测：若当前 live 包含剧中日期 `<date>` 且小说正文达 200 字以上，执行残文抢救 (Salvage)
+  ParsedChapter? _trySalvageLive() {
+    if (live.trim().isEmpty) return null;
+    final candidate = ResponseParser.parse(live);
+    final hasDate = candidate.date.isNotEmpty ||
+        RegExp(r'[<＜《]\s*date\s*[>＞》]', caseSensitive: false).hasMatch(live);
+    if (!hasDate || candidate.body.trim().length < 200) {
+      return null;
+    }
+    final choices = List<String>.from(candidate.choices);
+    if (choices.isEmpty) {
+      choices.addAll(<String>[
+        '继续深入探查眼下局势',
+        '按兵不动，静观其变',
+      ]);
+    } else if (choices.length == 1) {
+      choices.add('按兵不动，静观其变');
+    }
+    return ParsedChapter(
+      body: candidate.body,
+      date: candidate.date,
+      choices: choices,
+      glossary: candidate.glossary,
+      cast: candidate.cast,
+      stateRaw: candidate.stateRaw,
+      thought: candidate.thought,
+      rawOutput: live,
+    );
   }
 
   void cancel() {

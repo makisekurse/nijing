@@ -87,6 +87,12 @@ class ResponseParser {
     caseSensitive: false,
   );
 
+  /// 显式转折标识（如「正文：」、「【正文】」、「---」等）
+  static final RegExp _explicitTransition = RegExp(
+    r'(?:(?:\r?\n)+|^\s*)(?:【正文】|（正文）|正文[：:]|正式推演[：:]|现在开始[：:]|剧情推演[：:]|---\s*(?:\r?\n)+)',
+    caseSensitive: false,
+  );
+
   /// 完整解析。
   static ParsedChapter parse(String raw) {
     if (raw.trim().isEmpty) {
@@ -160,7 +166,7 @@ class ResponseParser {
   /// 其内容全部归入 thought；半截标签（`<th`、`</think`）按其方向处理。
   static (String thought, String body) splitLive(String raw) {
     if (raw.isEmpty) return ('', '');
-    final blocks = _scanBlocks(raw, terminateOpenThink: true);
+    final blocks = _scanBlocks(raw, terminateOpenThink: true, isLive: true);
     final thought = StringBuffer();
     final body = StringBuffer();
     var cursor = 0;
@@ -202,9 +208,12 @@ class ResponseParser {
   ///
   /// [terminateOpenThink] 为 true 时，未闭合的 think 块会被截断到下一个结构
   /// 标签之前 —— 见 [parse]。
+  /// [isLive] 为 true 时专用于流式分流：未闭合 think 绝不在中途基于段落断崖切给正文；
+  /// 只有在遇到后续结构标签或显式【正文】前缀时才切出，否则 100% 归入 thought，body 为空。
   static List<_Block> _scanBlocks(
     String raw, {
     bool terminateOpenThink = false,
+    bool isLive = false,
   }) {
     final blocks = <_Block>[];
     var cursor = 0;
@@ -230,17 +239,44 @@ class ResponseParser {
         //
         // 探测未闭合 think 的截断终点：
         // 1. 查找紧跟其后的第一个结构标签（如 <date>, <choices> 等）作为搜索上限；
-        // 2. 在上限范围内，通过显式转折前缀、自然叙事正文特征与段落断崖探测截断点，
-        //    严禁将没有 <body 标签的文学正文误吞为思考。
+        // 2. 在上限范围内：
+        //    - 流式模式 (isLive)：绝不在中途基于段落断崖切给小说正文！只有当未闭合 <think> 之后
+        //      出现了明确的下一个结构标签（<date>、<choices>、<glossary>、<cast>、<state>）
+        //      或显式【正文】前缀时，才允许切出；否则所有流式内容 100% 归入 thought，body 返回空字符串。
+        //    - 完整解析模式 (parse)：通过显式转折前缀、自然叙事正文特征与段落断崖探测截断点，
+        //      严禁将没有 <body 标签的文学正文误吞为思考。
         final next = _openTag.firstMatch(raw.substring(contentStart));
+        final nextTag =
+            next != null ? (next.group(1) ?? '').toLowerCase() : null;
+        final hasStructuralNextTag = nextTag != null &&
+            (nextTag == 'date' ||
+                nextTag == 'choices' ||
+                nextTag == 'glossary' ||
+                nextTag == 'cast' ||
+                nextTag == 'state');
+
         final searchLimit =
             next != null ? next.start : raw.length - contentStart;
         final candidate =
             raw.substring(contentStart, contentStart + searchLimit);
-        final cutoff = _detectOpenThinkCutoff(candidate);
 
-        end = contentStart + cutoff;
-        contentEnd = end;
+        if (isLive) {
+          final transMatch = _explicitTransition.firstMatch(candidate);
+          if (transMatch != null) {
+            end = contentStart + transMatch.start;
+            contentEnd = end;
+          } else if (hasStructuralNextTag && next != null) {
+            end = contentStart + next.start;
+            contentEnd = end;
+          } else {
+            end = raw.length;
+            contentEnd = raw.length;
+          }
+        } else {
+          final cutoff = _detectOpenThinkCutoff(candidate);
+          end = contentStart + cutoff;
+          contentEnd = end;
+        }
       }
 
       blocks.add(_Block(
@@ -252,7 +288,7 @@ class ResponseParser {
       cursor = end;
     }
     RuntimeLog.i('Parser', '扫到 ${blocks.length} 个结构块：'
-        '${blocks.map((b) => b.tag).join(',')}');
+        '${blocks.map((b) => b.tag).join(',')}', detail: true);
     return blocks;
   }
 
@@ -278,12 +314,8 @@ class ResponseParser {
     if (candidate.isEmpty) return 0;
 
     // 1. 显式转折标识探测（如「正文：」、「【正文】」、「---」等）
-    final explicitTransition = RegExp(
-      r'(?:\r?\n)+(?:【正文】|（正文）|正文[：:]|正式推演[：:]|现在开始[：:]|剧情推演[：:]|---\s*(?:\r?\n)+)',
-      caseSensitive: false,
-    );
-    final transMatch = explicitTransition.firstMatch(candidate);
-    if (transMatch != null && transMatch.start > 0) {
+    final transMatch = _explicitTransition.firstMatch(candidate);
+    if (transMatch != null && transMatch.start >= 0) {
       return transMatch.start;
     }
 

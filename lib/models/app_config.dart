@@ -54,6 +54,9 @@ class AppConfig {
   /// 模型深度思考模式（Thinking / Reasoning 模式）
   bool enableThinking;
 
+  /// 思考预算（0 为不设限/自由顶格，或 1024 / 2048 / 4096 / 8192）
+  int thinkingBudget;
+
   /// 运行日志（排障用）。默认关闭 —— 不开就是零开销。
   bool logEnabled;
 
@@ -76,6 +79,7 @@ class AppConfig {
     this.keepScreenOn = true,
     this.godMode = false,
     this.enableThinking = true,
+    this.thinkingBudget = 0,
     this.logEnabled = false,
     this.verboseLog = false,
   }) : maxWords = maxWords.clamp(200, 3000);
@@ -96,6 +100,7 @@ class AppConfig {
         'keepScreenOn': keepScreenOn,
         'godMode': godMode,
         'enableThinking': enableThinking,
+        'thinkingBudget': thinkingBudget,
         'logEnabled': logEnabled,
         'verboseLog': verboseLog,
       };
@@ -118,6 +123,7 @@ class AppConfig {
         keepScreenOn: json['keepScreenOn'] != false,
         godMode: json['godMode'] == true,
         enableThinking: json['enableThinking'] != false,
+        thinkingBudget: (json['thinkingBudget'] as num?)?.toInt() ?? 0,
         logEnabled: json['logEnabled'] == true,
         verboseLog: json['verboseLog'] == true,
       );
@@ -138,6 +144,7 @@ class AppConfig {
     bool? keepScreenOn,
     bool? godMode,
     bool? enableThinking,
+    int? thinkingBudget,
     bool? logEnabled,
     bool? verboseLog,
   }) =>
@@ -157,6 +164,7 @@ class AppConfig {
         keepScreenOn: keepScreenOn ?? this.keepScreenOn,
         godMode: godMode ?? this.godMode,
         enableThinking: enableThinking ?? this.enableThinking,
+        thinkingBudget: thinkingBudget ?? this.thinkingBudget,
         logEnabled: logEnabled ?? this.logEnabled,
         verboseLog: verboseLog ?? this.verboseLog,
       );
