@@ -17,7 +17,7 @@
 - **包名**：`io.github.makisekurse.nijing`
 - **开发者署名**：`makisekurisu`（遵循用户严格要求，仅署此名）
 - **当前版本**：`v1.3.8+1`
-- **基线单测**：**172 项单元测试 100% 全绿（运行耗时 ~1 秒）**
+- **基线单测**：**177 项单元测试 100% 全绿（运行耗时 ~1 秒）**
 
 ---
 
@@ -205,4 +205,4 @@ flutter build apk --release --target-platform android-arm64
 | **阅读界面** | `lib/ui/screens/reader_screen.dart` | 沉浸阅读视口、触摸手势防打架、视口停泊 |
 | **思考面板** | `lib/ui/widgets/live_thought_view.dart` | 常驻思考展示、折叠保持、独立划动感知 |
 | **世界线树** | `lib/ui/widgets/world_line_tree.dart` | 时空树可视化、卡片严密对齐、文本防溢出 |
-| **单测套件** | `test/nijing_test.dart` | 172 项全量测试集 |
+| **单测套件** | `test/nijing_test.dart` | 177 项全量测试集 |

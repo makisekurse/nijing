@@ -169,9 +169,16 @@ class FallbackService {
           } else if (choices.length == 1) {
             choices.add('按兵不动，静观其变');
           }
+          final salvagedDate = candidate.date.isNotEmpty
+              ? candidate.date
+              : (RegExp(r'[<＜《]\s*date\s*[>＞》]([^\n<＜《]+)')
+                      .firstMatch(rawSoFar)
+                      ?.group(1)
+                      ?.trim() ??
+                  '');
           final salvaged = ParsedChapter(
             body: candidate.body,
-            date: candidate.date,
+            date: salvagedDate,
             choices: choices,
             glossary: candidate.glossary,
             cast: candidate.cast,
@@ -185,7 +192,7 @@ class FallbackService {
         }
 
         // 仅在完全没有有效正文时才重试，重试时发出友好提示
-        if (e.retryable && attempt < _maxNudge) {
+        if (e.retryable && attempt < _maxNudge && candidate.body.trim().isEmpty) {
           if (buffer.isNotEmpty) yield const GenEvent.restart();
           yield GenEvent.notice('${e.message} 正在重试…');
           continue;
@@ -288,11 +295,10 @@ class FallbackService {
 
     // 关键修复 2：网络故障（超时、断开等 AppErrorKind.network）重试耗尽时，
     // 严禁生成本地降级章节覆盖用户存档槽！
-    // 必须以 GenEvent.failed 抛出，保留用户的备选分支与槽位现场，允许用户网络恢复后继续。
+    // 必须以 GenEvent.failed 抛出，严禁发送 restart 抹除 live 缓冲，保留用户的备选分支与槽位现场。
     if (err.kind == AppErrorKind.network) {
-      yield const GenEvent.restart();
       yield GenEvent.failed(
-        '${err.message}\n网络连接中断且多次重试未果，已保留当前进度与选项现场。请检查网络后点击选项继续推演。',
+        '${err.message}\n网络连接中断且未满足残文抢救条件，已保留当前推演现场。请检查网络后点击选项继续推演。',
       );
       return;
     }

@@ -28,13 +28,18 @@ class GenerationController extends ChangeNotifier {
   final String slotId;
   final LlmClient client;
 
-  GenerationController(this.slotId) : client = LlmClient();
+  GenerationController(this.slotId, {LlmClient? client})
+      : client = client ?? LlmClient();
 
   static final Map<String, GenerationController> _registry =
       <String, GenerationController>{};
 
-  static GenerationController forSlot(String slotId) =>
-      _registry.putIfAbsent(slotId, () => GenerationController(slotId));
+  static GenerationController forSlot(String slotId, {LlmClient? client}) {
+    if (client != null) {
+      return _registry[slotId] = GenerationController(slotId, client: client);
+    }
+    return _registry.putIfAbsent(slotId, () => GenerationController(slotId));
+  }
 
   static GenerationController? get(String slotId) => _registry[slotId];
 
@@ -204,7 +209,7 @@ class GenerationController extends ChangeNotifier {
         notifyListeners();
       } else {
         status = GenerationStatus.failed;
-        live = '';
+        // 关键：当网络断开或异常时，严禁无脑清空 live = ''！保留当前推演残文现场，防止用户成果丢失
         pendingAction = '';
         if (session.choices.isEmpty && backupChoices.isNotEmpty) {
           session.restoreChoices(backupChoices);
@@ -255,7 +260,7 @@ class GenerationController extends ChangeNotifier {
       status = GenerationStatus.failed;
       notice = '推演发生异常：$e';
       noticeSticky = true;
-      live = '';
+      // 关键：严禁无脑清空 live = ''！保留推演残文现场
       pendingAction = '';
       if (session.choices.isEmpty && backupChoices.isNotEmpty) {
         session.restoreChoices(backupChoices);
@@ -282,9 +287,16 @@ class GenerationController extends ChangeNotifier {
     } else if (choices.length == 1) {
       choices.add('按兵不动，静观其变');
     }
+    final salvagedDate = candidate.date.isNotEmpty
+        ? candidate.date
+        : (RegExp(r'[<＜《]\s*date\s*[>＞》]([^\n<＜《]+)')
+                .firstMatch(live)
+                ?.group(1)
+                ?.trim() ??
+            '');
     return ParsedChapter(
       body: candidate.body,
-      date: candidate.date,
+      date: salvagedDate,
       choices: choices,
       glossary: candidate.glossary,
       cast: candidate.cast,

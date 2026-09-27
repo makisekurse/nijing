@@ -591,7 +591,7 @@ class _ReaderScreenState extends State<ReaderScreen>
                                   i,
                                   anchorKey: _chapterKeyFor(i),
                                 ),
-                              if (_busy) _liveView(theme, fontSize),
+                              if (_busy || _live.isNotEmpty) _liveView(theme, fontSize),
                               if (_notice.isNotEmpty && (!_busy || _noticeSticky))
                                 _noticeView(theme),
                             ],
@@ -1962,9 +1962,11 @@ class _ReaderScreenState extends State<ReaderScreen>
     // 本幕完成后平滑过渡到章节菜单的思维链查看。
     final (thought, preview) = ResponseParser.splitLive(_live);
     final hasThought = thought.isNotEmpty;
-    final statusText = _degraded
-        ? '本地降级中…'
-        : (preview.isEmpty && hasThought ? '推演思考中…' : '推演中…');
+    final statusText = _busy
+        ? (_degraded
+            ? '本地降级中…'
+            : (preview.isEmpty && hasThought ? '推演思考中…' : '推演中…'))
+        : '推演中断（已保留现场）';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1974,15 +1976,22 @@ class _ReaderScreenState extends State<ReaderScreen>
           padding: const EdgeInsets.only(bottom: 12),
           child: Row(
             children: <Widget>[
-              SizedBox(
-                width: 12,
-                height: 12,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  valueColor:
-                      AlwaysStoppedAnimation<Color>(palette.accent),
+              if (_busy)
+                SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor:
+                        AlwaysStoppedAnimation<Color>(palette.accent),
+                  ),
+                )
+              else
+                Icon(
+                  Icons.pause_circle_outline_rounded,
+                  size: 14,
+                  color: palette.accent,
                 ),
-              ),
               const SizedBox(width: 8),
               Text(
                 statusText,

@@ -2633,6 +2633,98 @@ final x = 1;
         expect(failedEvents.length, 1);
         expect(failedEvents.first.text, contains('网络连接中断'));
       });
+
+      test('ResponseParser.splitLive · 思考过程中包含 markdown 分割线 --- 绝不切出正文（正文保持为空）', () {
+        const rawWithDividers =
+            '<think>第一步：分析世界观\n---\n第二步：分析主角动机\n---\n第三步：推演剧情走势';
+        final (thought, body) = ResponseParser.splitLive(rawWithDividers);
+        expect(thought, contains('第一步：分析世界观'));
+        expect(thought, contains('第二步：分析主角动机'));
+        expect(thought, contains('第三步：推演剧情走势'));
+        expect(body, '');
+      });
+
+      test('ResponseParser.splitLive · 思考过程中讨论 <think> 标签不影响后续 <date> 切出正文', () {
+        const raw =
+            '<think>思考分析：在提示词中使用了 <think> 标签，现在输出日期与正文\n<date>元丰元年</date>\n月白风清，林远伫立在渡口。';
+        final (thought, body) = ResponseParser.splitLive(raw);
+        expect(thought, contains('思考分析'));
+        expect(body, '月白风清，林远伫立在渡口。');
+      });
+
+      test('ResponseParser.parse · 模型漏写 </date> 闭标签时，自动截断至换行，小说正文绝不被吞入 date', () {
+        const raw = '<date>建中元年冬\n\n大雪纷飞，林远踏上山道。山道崎岖难行。\n\n<choices>\n继续前行\n原地折返\n</choices>';
+        final p = ResponseParser.parse(raw);
+        expect(p.date, '建中元年冬');
+        expect(p.body, contains('大雪纷飞，林远踏上山道'));
+        expect(p.choices.length, 2);
+      });
+
+      test('FallbackService · 网络中断且已有正文但未达 200 字时，严禁重试清空已生成内容，直接报错并保留现场', () async {
+        final mockClient = _MockNetworkInterruptWithShortBodyClient();
+        final fallback = FallbackService(mockClient);
+        final book = WorldBook(
+          id: 'test',
+          name: '测试世界',
+          era: '建中元年',
+          openingScene: '序幕正文',
+          openingChoices: <String>['行动1', '行动2'],
+        );
+
+        final events = await fallback.generate(
+          config: AppConfig(),
+          apiKey: 'test-key',
+          book: book,
+          history: <ChapterNode>[],
+          playerAction: '推门而入',
+        ).toList();
+
+        // 验证没有输出 restart 事件来清空已生成内容
+        final restartEvents =
+            events.where((e) => e.kind == GenEventKind.restart).toList();
+        expect(restartEvents, isEmpty);
+
+        // 验证失败事件被触发
+        final failedEvents =
+            events.where((e) => e.kind == GenEventKind.failed).toList();
+        expect(failedEvents.length, 1);
+        expect(failedEvents.first.text, contains('网络连接中断'));
+      });
+
+      test('GenerationController · 推演失败时严禁无脑清空 live 缓冲', () async {
+        final mockClient = _MockNetworkInterruptWithShortBodyClient();
+        final controller = GenerationController.forSlot(
+          'test_slot_live_preserve',
+          client: mockClient,
+        );
+        controller.reset();
+
+        final book = WorldBook(
+          id: 'test',
+          name: '测试世界',
+          era: '建中元年',
+          openingScene: '序幕正文',
+          openingChoices: <String>['行动1', '行动2'],
+        );
+        final slot = SaveSlot(
+          id: 'test_slot_live_preserve',
+          title: '测试存档',
+          worldBook: book,
+        );
+        final session = GameSession(slot);
+
+        await controller.startGeneration(
+          session: session,
+          config: AppConfig(),
+          apiKey: 'test-key',
+          action: '前进',
+          book: book,
+        );
+
+        expect(controller.status, GenerationStatus.failed);
+        // live 缓冲不为空，保留已接收文本现场
+        expect(controller.live, contains('林远按住剑柄'));
+      });
     });
   });
 }
@@ -2695,6 +2787,19 @@ class _MockNetworkFailAlwaysClient extends LlmClient {
   }) async* {
     receivedMessages.add(List<Map<String, String>>.from(messages));
     throw const AppError(AppErrorKind.network, '连接模型服务超时，网络连接断开。');
+  }
+}
+
+class _MockNetworkInterruptWithShortBodyClient extends LlmClient {
+  @override
+  Stream<String> streamChat({
+    required AppConfig config,
+    required String apiKey,
+    required List<Map<String, String>> messages,
+    String workspaceId = '',
+  }) async* {
+    yield '<date>建中元年冬</date>\n\n林远按住剑柄，缓步走入风雪中。';
+    throw const AppError(AppErrorKind.network, '网络数据流意外中断');
   }
 }
 

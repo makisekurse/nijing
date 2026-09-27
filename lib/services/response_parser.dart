@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import '../models/annotation.dart';
 import 'runtime_log.dart';
 
@@ -87,7 +88,21 @@ class ResponseParser {
     caseSensitive: false,
   );
 
-  /// 显式转折标识（如「正文：」、「【正文】」、「---」等）
+  static const String _structuralTagAlt = '(date|choices|glossary|cast|state)';
+
+  /// 结构标签（排除 think/thought，用于探测思考终点）
+  static final RegExp _structuralOpenTag = RegExp(
+    r'[<＜《]\s*' + _structuralTagAlt + r'\s*[>＞》]',
+    caseSensitive: false,
+  );
+
+  /// 显式正文标识（仅限正文标识，绝不含 markdown 分隔线 ---）
+  static final RegExp _explicitBodyPrefix = RegExp(
+    r'(?:(?:\r?\n)+|^\s*)(?:【正文】|（正文）|正文[：:]|正式推演[：:]|现在开始[：:]|剧情推演[：:])',
+    caseSensitive: false,
+  );
+
+  /// 显式转折标识（用于 parse 模式下的启发式截断，包含 --- 等转折符）
   static final RegExp _explicitTransition = RegExp(
     r'(?:(?:\r?\n)+|^\s*)(?:【正文】|（正文）|正文[：:]|正式推演[：:]|现在开始[：:]|剧情推演[：:]|---\s*(?:\r?\n)+)',
     caseSensitive: false,
@@ -238,35 +253,28 @@ class ResponseParser {
         // 正文整个被当成思考 → 正文为空 → 判定「空内容」→ 反复重试。
         //
         // 探测未闭合 think 的截断终点：
-        // 1. 查找紧跟其后的第一个结构标签（如 <date>, <choices> 等）作为搜索上限；
+        // 1. 查找紧跟其后的第一个结构标签（<date>, <choices>, <glossary>, <cast>, <state>）作为搜索上限；
         // 2. 在上限范围内：
         //    - 流式模式 (isLive)：绝不在中途基于段落断崖切给小说正文！只有当未闭合 <think> 之后
         //      出现了明确的下一个结构标签（<date>、<choices>、<glossary>、<cast>、<state>）
         //      或显式【正文】前缀时，才允许切出；否则所有流式内容 100% 归入 thought，body 返回空字符串。
         //    - 完整解析模式 (parse)：通过显式转折前缀、自然叙事正文特征与段落断崖探测截断点，
         //      严禁将没有 <body 标签的文学正文误吞为思考。
-        final next = _openTag.firstMatch(raw.substring(contentStart));
-        final nextTag =
-            next != null ? (next.group(1) ?? '').toLowerCase() : null;
-        final hasStructuralNextTag = nextTag != null &&
-            (nextTag == 'date' ||
-                nextTag == 'choices' ||
-                nextTag == 'glossary' ||
-                nextTag == 'cast' ||
-                nextTag == 'state');
-
-        final searchLimit =
-            next != null ? next.start : raw.length - contentStart;
+        final nextStructural =
+            _structuralOpenTag.firstMatch(raw.substring(contentStart));
+        final searchLimit = nextStructural != null
+            ? nextStructural.start
+            : raw.length - contentStart;
         final candidate =
             raw.substring(contentStart, contentStart + searchLimit);
 
         if (isLive) {
-          final transMatch = _explicitTransition.firstMatch(candidate);
+          final transMatch = _explicitBodyPrefix.firstMatch(candidate);
           if (transMatch != null) {
             end = contentStart + transMatch.start;
             contentEnd = end;
-          } else if (hasStructuralNextTag && next != null) {
-            end = contentStart + next.start;
+          } else if (nextStructural != null) {
+            end = contentStart + nextStructural.start;
             contentEnd = end;
           } else {
             end = raw.length;
@@ -277,6 +285,17 @@ class ResponseParser {
           end = contentStart + cutoff;
           contentEnd = end;
         }
+      } else if (tag == 'date') {
+        // date 标签按提示词规范只有一行，若模型漏写 </date>，截断至换行或下一个结构标签，防止吞没正文
+        final nextNewline = raw.indexOf('\n', contentStart);
+        final nextTag = _structuralOpenTag.firstMatch(raw.substring(contentStart));
+        var cutoff = raw.length;
+        if (nextNewline != -1) cutoff = math.min(cutoff, nextNewline);
+        if (nextTag != null) {
+          cutoff = math.min(cutoff, contentStart + nextTag.start);
+        }
+        end = cutoff;
+        contentEnd = end;
       }
 
       blocks.add(_Block(
