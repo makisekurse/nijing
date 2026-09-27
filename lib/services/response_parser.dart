@@ -96,11 +96,6 @@ class ResponseParser {
     caseSensitive: false,
   );
 
-  /// 显式正文标识（仅限正文标识，绝不含 markdown 分隔线 ---）
-  static final RegExp _explicitBodyPrefix = RegExp(
-    r'(?:(?:\r?\n)+|^\s*)(?:【正文】|（正文）|正文[：:]|正式推演[：:]|现在开始[：:]|剧情推演[：:])',
-    caseSensitive: false,
-  );
 
   /// 显式转折标识（用于 parse 模式下的启发式截断，包含 --- 等转折符）
   static final RegExp _explicitTransition = RegExp(
@@ -269,17 +264,14 @@ class ResponseParser {
             raw.substring(contentStart, contentStart + searchLimit);
 
         if (isLive) {
-          final transMatch = _explicitBodyPrefix.firstMatch(candidate);
-          if (transMatch != null) {
-            end = contentStart + transMatch.start;
-            contentEnd = end;
-          } else if (nextStructural != null) {
-            end = contentStart + nextStructural.start;
-            contentEnd = end;
-          } else {
-            end = raw.length;
-            contentEnd = raw.length;
-          }
+          // ⚠️ 流式生成阶段 (isLive)：
+          // 只要真正的 </think> 闭标签未到来，绝不中途基于任何内部标签或前缀提前截断！
+          // 大模型在深度思考草稿中极常包含 <date>、<choices>、<state>、[正文] 等构思词汇。
+          // 若在流式中途截断，会导致草稿后半截被当成小说正文疯狂流入正文区，闭标签到来时
+          // 又瞬间被吞回思考框，导致文字剧烈跳动闪烁。
+          // 因此流式中未闭合 think 必须 100% 保持在 thought 框，body 严格返回空字符串。
+          end = raw.length;
+          contentEnd = raw.length;
         } else {
           final cutoff = _detectOpenThinkCutoff(candidate);
           end = contentStart + cutoff;

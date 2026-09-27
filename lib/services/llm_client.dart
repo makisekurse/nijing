@@ -208,12 +208,12 @@ class LlmClient {
 
     final lines = response.stream
         .timeout(
-          const Duration(seconds: 20),
+          const Duration(seconds: 35),
           onTimeout: (sink) {
             sink.addError(
               const AppError(
                 AppErrorKind.network,
-                '流式数据接收超时（超过 20 秒无数据帧），网络连接可能已中断。',
+                '流式数据接收超时（超过 35 秒无数据帧），网络连接可能已中断。',
               ),
             );
             sink.close();

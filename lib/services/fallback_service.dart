@@ -87,6 +87,8 @@ class FallbackService {
 
     AppError? lastError;
     var contractNudgeCount = 0;
+    ParsedChapter? bestSalvageChapter;
+    String? bestSalvageRaw;
 
     for (var attempt = 0; attempt <= _maxNudge; attempt++) {
       if (client.isCancelled) {
@@ -148,19 +150,44 @@ class FallbackService {
         RuntimeLog.w('Fallback', '第 ${attempt + 1} 轮抛出：'
             '${e.kind.name} · ${e.message}${e.detail == null ? '' : ' · ${e.detail}'}');
 
-        // 断连残文抢救机制 (Salvage)：
-        // 当网络断开或异常时，若当前已接收的 buffer 包含剧中日期 <date> 且小说正文已达 200 字以上，
-        // 执行残文抢救：调用 ResponseParser.parse 解析现有正文，自动补齐默认可选行动分支（如缺少 <choices>），
-        // 直接结算为当前幕并持久化保存，绝不让生成成果化为乌有。
         final rawSoFar = buffer.toString();
         final candidate = ResponseParser.parse(rawSoFar);
         final hasDate = candidate.date.isNotEmpty ||
             RegExp(r'[<＜《]\s*date\s*[>＞》]', caseSensitive: false)
                 .hasMatch(rawSoFar);
-        if (hasDate && candidate.body.trim().length >= 200) {
+        final hasSubstantialBody =
+            hasDate && candidate.body.trim().length >= 200;
+
+        // 若当前轮次有足够的有效正文产出，记录为最佳兜底候选
+        if (hasSubstantialBody) {
+          if (bestSalvageChapter == null ||
+              candidate.body.trim().length >
+                  bestSalvageChapter.body.trim().length) {
+            bestSalvageChapter = candidate;
+            bestSalvageRaw = rawSoFar;
+          }
+        }
+
+        // ⚠️ 优先重试机制：
+        // 只要错误可重试（网络中断/连接被掐断/超时等），且还有重试次数，必须优先发起下一轮完整推演！
+        // 绝对严禁在第 1 轮就因为收到半截残文（如 300 字断章）而放弃重试，导致用户遭遇“卡死/断篇”体验。
+        if (e.retryable && attempt < _maxNudge) {
+          if (buffer.isNotEmpty) yield const GenEvent.restart();
+          yield GenEvent.notice(
+              '${e.message} 正在重新连接并完整推演（第 ${attempt + 2} 次）…');
+          continue;
+        }
+
+        // ⚠️ 终极底线兜底 (Last-Resort Salvage)：
+        // 只有当所有重试机会耗尽（或遇到不可重试异常）且无法继续时，若之前轮次曾抢救到有效正文，
+        // 才作为最后的兜底防线结算并保存，绝不让用户的生成成果白费。
+        final targetSalvage =
+            hasSubstantialBody ? candidate : bestSalvageChapter;
+        final targetRaw = hasSubstantialBody ? rawSoFar : bestSalvageRaw;
+        if (targetSalvage != null && targetRaw != null) {
           RuntimeLog.i('Fallback',
-              '网络异常但正文充足（${candidate.body.trim().length} 字，含 date），启动残文抢救 (Salvage)');
-          final choices = List<String>.from(candidate.choices);
+              '所有重试均受网络限制，正文充足（${targetSalvage.body.trim().length} 字，含 date），启动终极残文抢救 (Salvage)');
+          final choices = List<String>.from(targetSalvage.choices);
           if (choices.isEmpty) {
             choices.addAll(<String>[
               '继续深入探查眼下局势',
@@ -169,34 +196,28 @@ class FallbackService {
           } else if (choices.length == 1) {
             choices.add('按兵不动，静观其变');
           }
-          final salvagedDate = candidate.date.isNotEmpty
-              ? candidate.date
+          final salvagedDate = targetSalvage.date.isNotEmpty
+              ? targetSalvage.date
               : (RegExp(r'[<＜《]\s*date\s*[>＞》]([^\n<＜《]+)')
-                      .firstMatch(rawSoFar)
+                      .firstMatch(targetRaw)
                       ?.group(1)
                       ?.trim() ??
                   '');
           final salvaged = ParsedChapter(
-            body: candidate.body,
+            body: targetSalvage.body,
             date: salvagedDate,
             choices: choices,
-            glossary: candidate.glossary,
-            cast: candidate.cast,
-            stateRaw: candidate.stateRaw,
-            thought: candidate.thought,
-            rawOutput: rawSoFar,
+            glossary: targetSalvage.glossary,
+            cast: targetSalvage.cast,
+            stateRaw: targetSalvage.stateRaw,
+            thought: targetSalvage.thought,
+            rawOutput: targetRaw,
           );
-          yield const GenEvent.notice('网络连接中断，已成功抢救并保存推演正文。');
+          yield const GenEvent.notice('网络多次波动中断，已为您抢救保存当前幕推演。');
           yield GenEvent.done(salvaged);
           return;
         }
 
-        // 仅在完全没有有效正文时才重试，重试时发出友好提示
-        if (e.retryable && attempt < _maxNudge && candidate.body.trim().isEmpty) {
-          if (buffer.isNotEmpty) yield const GenEvent.restart();
-          yield GenEvent.notice('${e.message} 正在重试…');
-          continue;
-        }
         break;
       }
 

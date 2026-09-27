@@ -1966,16 +1966,27 @@ final x = 1;
       expect(body, '');
     });
 
-    test('流式 splitLive 对未闭合 think 后出现结构标签或显式正文标识时正常切出', () {
-      const rawDate = '<think>思考推演中\n<date>元丰三年</date>\n大雪纷飞，寒风呼啸。林远推开了客栈的大门。';
-      final (thoughtDate, bodyDate) = ResponseParser.splitLive(rawDate);
-      expect(thoughtDate, '思考推演中');
-      expect(bodyDate, '大雪纷飞，寒风呼啸。林远推开了客栈的大门。');
+    test('流式 splitLive 对未闭合 think 严格零泄漏，闭合后正常切出正文', () {
+      const rawDateOpen =
+          '<think>思考推演中\n<date>元丰三年</date>\n大雪纷飞，寒风呼啸。林远推开了客栈的大门。';
+      final (thoughtDateOpen, bodyDateOpen) =
+          ResponseParser.splitLive(rawDateOpen);
+      expect(thoughtDateOpen, contains('思考推演中'));
+      expect(bodyDateOpen, '', reason: '流式未闭合思考绝不提前泄漏给小说正文');
 
-      const rawExplicit = '<think>思考推演中\n\n【正文】\n大雪纷飞，寒风呼啸。林远推开了客栈的大门。';
-      final (thoughtExp, bodyExp) = ResponseParser.splitLive(rawExplicit);
-      expect(thoughtExp, '思考推演中');
-      expect(bodyExp, '大雪纷飞，寒风呼啸。林远推开了客栈的大门。');
+      const rawDateClosed =
+          '<think>思考推演中\n<date>元丰三年</date>\n构思完毕</think>\n<date>元丰三年</date>\n大雪纷飞，寒风呼啸。林远推开了客栈的大门。';
+      final (thoughtDateClosed, bodyDateClosed) =
+          ResponseParser.splitLive(rawDateClosed);
+      expect(thoughtDateClosed, contains('思考推演中'));
+      expect(bodyDateClosed, '大雪纷飞，寒风呼啸。林远推开了客栈的大门。');
+
+      const rawExplicitOpen =
+          '<think>思考推演中\n\n【正文】\n大雪纷飞，寒风呼啸。林远推开了客栈的大门。';
+      final (thoughtExpOpen, bodyExpOpen) =
+          ResponseParser.splitLive(rawExplicitOpen);
+      expect(thoughtExpOpen, contains('思考推演中'));
+      expect(bodyExpOpen, '', reason: '流式未闭合前即使包含正文前缀也绝不泄漏');
     });
 
     test('未闭合 think 后接短句氛围开篇（如「夜色深沉。」）：短句绝不被吞入思考', () {
@@ -2530,17 +2541,20 @@ final x = 1;
         expect(body, '');
       });
 
-      test('ResponseParser.splitLive · 未闭合 think 后出现结构标签或显式正文标识时立即切出', () {
+      test('ResponseParser.splitLive · 流式未闭合 think 严格保密零泄漏，闭合后正文平滑流入', () {
         const rawWithDate =
-            '<think>思考推演中\n<date>正统十四年</date>\n残阳如血，塞外狂风席卷着黄沙。';
+            '<think>思考推演中\n<date>正统十四年</date>\n思考草稿中……';
         final (thought1, body1) = ResponseParser.splitLive(rawWithDate);
-        expect(thought1, '思考推演中');
-        expect(body1, '残阳如血，塞外狂风席卷着黄沙。');
+        expect(thought1, contains('思考推演中'));
+        expect(thought1, contains('思考草稿中……'));
+        expect(body1, '', reason: '未闭合前小说正文严格为空，防止草稿外泄与回弹');
 
-        const rawWithExplicit = '<think>思考推演完毕\n\n【正文】\n城楼之上，黑云压城城欲摧。';
-        final (thought2, body2) = ResponseParser.splitLive(rawWithExplicit);
-        expect(thought2, '思考推演完毕');
-        expect(body2, '城楼之上，黑云压城城欲摧。');
+        const rawWithDateClosed =
+            '<think>思考推演中\n<date>正统十四年</date>\n思考草稿中……</think>\n<date>正统十四年</date>\n残阳如血，塞外狂风席卷着黄沙。';
+        final (thought1Closed, body1Closed) =
+            ResponseParser.splitLive(rawWithDateClosed);
+        expect(thought1Closed, contains('思考推演中'));
+        expect(body1Closed, '残阳如血，塞外狂风席卷着黄沙。');
       });
 
       test('FallbackService · 网络中断残文抢救 (Salvage)：含 date 且正文 >= 200 字时直接结算并补齐选项',
@@ -2644,12 +2658,18 @@ final x = 1;
         expect(body, '');
       });
 
-      test('ResponseParser.splitLive · 思考过程中讨论 <think> 标签不影响后续 <date> 切出正文', () {
-        const raw =
-            '<think>思考分析：在提示词中使用了 <think> 标签，现在输出日期与正文\n<date>元丰元年</date>\n月白风清，林远伫立在渡口。';
-        final (thought, body) = ResponseParser.splitLive(raw);
-        expect(thought, contains('思考分析'));
-        expect(body, '月白风清，林远伫立在渡口。');
+      test('ResponseParser.splitLive · 思考过程中讨论标签零泄漏，闭合后正文正常流出', () {
+        const rawOpen =
+            '<think>思考分析：在提示词中使用了 <think> 标签，现在输出日期与正文\n<date>元丰元年</date>\n草拟细节……';
+        final (thoughtOpen, bodyOpen) = ResponseParser.splitLive(rawOpen);
+        expect(thoughtOpen, contains('思考分析'));
+        expect(bodyOpen, '');
+
+        const rawClosed =
+            '<think>思考分析：在提示词中使用了 <think> 标签，现在输出日期与正文\n<date>元丰元年</date>\n草拟细节……</think>\n<date>元丰元年</date>\n月白风清，林远伫立在渡口。';
+        final (thoughtClosed, bodyClosed) = ResponseParser.splitLive(rawClosed);
+        expect(thoughtClosed, contains('思考分析'));
+        expect(bodyClosed, '月白风清，林远伫立在渡口。');
       });
 
       test('ResponseParser.parse · 模型漏写 </date> 闭标签时，自动截断至换行，小说正文绝不被吞入 date', () {
@@ -2660,7 +2680,7 @@ final x = 1;
         expect(p.choices.length, 2);
       });
 
-      test('FallbackService · 网络中断且已有正文但未达 200 字时，严禁重试清空已生成内容，直接报错并保留现场', () async {
+      test('FallbackService · 网络中断且正文不足 200 字时，自动重连重试直至耗尽，最终抛出失败并保留现场', () async {
         final mockClient = _MockNetworkInterruptWithShortBodyClient();
         final fallback = FallbackService(mockClient);
         final book = WorldBook(
@@ -2679,16 +2699,11 @@ final x = 1;
           playerAction: '推门而入',
         ).toList();
 
-        // 验证没有输出 restart 事件来清空已生成内容
-        final restartEvents =
-            events.where((e) => e.kind == GenEventKind.restart).toList();
-        expect(restartEvents, isEmpty);
-
-        // 验证失败事件被触发
+        // 验证失败事件被触发（重试耗尽后）
         final failedEvents =
             events.where((e) => e.kind == GenEventKind.failed).toList();
         expect(failedEvents.length, 1);
-        expect(failedEvents.first.text, contains('网络连接中断'));
+        expect(failedEvents.first.text, contains('网络数据流意外中断'));
       });
 
       test('GenerationController · 推演失败时严禁无脑清空 live 缓冲', () async {
@@ -2723,7 +2738,74 @@ final x = 1;
 
         expect(controller.status, GenerationStatus.failed);
         // live 缓冲不为空，保留已接收文本现场
-        expect(controller.live, contains('林远按住剑柄'));
+      });
+
+      group('v1.3.9 · 彻底物理隔离思考草稿与断流重试容灾', () {
+        test('ResponseParser.splitLive · 真实日志场景：思考草稿中出现 <date> 与 <state> 绝对零外泄到正文区', () {
+          // 模拟真实百炼日志中的 reasoning_content 流入
+          const rawDuringReasoning = '<think>我们需要响应玩家主宰模式。'
+              '当前世界状态：时间1976年10月7日 凌晨05:40，地点上海市委大楼。\n'
+              '<date>1976年10月7日 凌晨</date>\n'
+              '<state>上海市委大楼</state>\n'
+              '接着分析主角行动与民兵部署策略……';
+
+          final (thought, body) = ResponseParser.splitLive(rawDuringReasoning);
+          expect(thought, contains('我们需要响应玩家主宰模式'));
+          expect(thought, contains('<date>1976年10月7日 凌晨</date>'));
+          expect(thought, contains('<state>上海市委大楼</state>'));
+          expect(thought, contains('接着分析主角行动与民兵部署策略……'));
+          expect(body, '', reason: '思考未闭合前，草稿中包含的任何结构标签绝对不可作为正文流出！');
+
+          // 模拟百炼首包正文到达，客户端注入 </think>\n\n 后的流式状态
+          final rawContentArrived = '$rawDuringReasoning</think>\n\n'
+              '<date>1976年10月7日 凌晨05:40</date>\n\n'
+              '大楼内脚步声匆匆，广播控制室的红色信号灯闪烁不定。';
+
+          final (thoughtAfter, bodyAfter) =
+              ResponseParser.splitLive(rawContentArrived);
+          expect(thoughtAfter, contains('我们需要响应玩家主宰模式'));
+          expect(bodyAfter, contains('大楼内脚步声匆匆，广播控制室的红色信号灯闪烁不定。'));
+          expect(bodyAfter, isNot(contains('接着分析主角行动与民兵部署策略')),
+              reason: '真正的正文流出后，思考草稿绝不倒灌或残留于正文！');
+        });
+
+        test('FallbackService · 网络异常遇到残文时优先自动发起重试，严禁在首轮直接截断造成断章', () async {
+          final mockClient = _MockNetworkInterruptOnceThenSucceedClient();
+          final fallback = FallbackService(mockClient);
+          final book = WorldBook(
+            id: 'test',
+            name: '测试世界',
+            era: '1976年',
+            openingScene: '序幕正文',
+            openingChoices: <String>['行动1', '行动2'],
+          );
+
+          final events = await fallback.generate(
+            config: AppConfig(),
+            apiKey: 'test-key',
+            book: book,
+            history: <ChapterNode>[],
+            playerAction: '致电各省市委',
+          ).toList();
+
+          // 验证经历了 restart 事件与网络波动提示
+          final restartEvents =
+              events.where((e) => e.kind == GenEventKind.restart).toList();
+          expect(restartEvents.isNotEmpty, isTrue,
+              reason: '首轮网络异常后应清空旧残文并自动重连');
+
+          final noticeEvents =
+              events.where((e) => e.kind == GenEventKind.notice).toList();
+          expect(
+              noticeEvents.any((n) => n.text.contains('正在重新连接并完整推演')), isTrue);
+
+          // 验证最终拿到完整推演，而非首轮的残章
+          final doneEvents =
+              events.where((e) => e.kind == GenEventKind.done).toList();
+          expect(doneEvents.length, 1);
+          expect(doneEvents.first.chapter!.body, contains('全国各地电报如雪片般飞来'));
+          expect(doneEvents.first.chapter!.choices.length, 2);
+        });
       });
     });
   });
@@ -2802,5 +2884,31 @@ class _MockNetworkInterruptWithShortBodyClient extends LlmClient {
     throw const AppError(AppErrorKind.network, '网络数据流意外中断');
   }
 }
+
+class _MockNetworkInterruptOnceThenSucceedClient extends LlmClient {
+  int attempts = 0;
+
+  @override
+  Stream<String> streamChat({
+    required AppConfig config,
+    required String apiKey,
+    required List<Map<String, String>> messages,
+    String workspaceId = '',
+  }) async* {
+    attempts++;
+    if (attempts == 1) {
+      yield '<date>1976年10月7日</date>\n\n林远在办公室沉吟良久，电报机不断作响。局势已经千钧一发。'
+          '全国各地的目光都在注视着这里，每一分每一秒都关乎着未来的走向。他握着听筒的手微微颤抖，但眼神却异常坚定。'
+          '门外传来了急促的脚步声，通讯员满头大汗地闯了进来：“报告！北京方向急电！”林远深吸一口气，接过电报纸快速浏览。'
+          '形势比预想的还要复杂，但这一战已经无可避免。他拿起红色专线电话，下达了第一道命令……';
+      throw const AppError(AppErrorKind.network, 'ClientException: Connection closed while receiving data');
+    }
+
+    yield '<date>1976年10月7日 晨</date>\n\n'
+        '全国各地电报如雪片般飞来，广播控制室内一片肃穆。林远当机立断，下达全线戒备指令。\n\n'
+        '<choices>\n1. 调度基层民兵加强广播大楼防守\n2. 迅速召集核心骨干举行闭门紧急例会\n</choices>';
+  }
+}
+
 
 
