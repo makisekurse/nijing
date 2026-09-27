@@ -1,398 +1,208 @@
-# 拟境 · 交接文档
+# 拟境 · 全量技术交接与架构文档（2026-09-27 · v1.3.7）
 
-> **更新时间**：2026-09-25 17:00
-> **仓库**：https://github.com/makisekurse/nijing （公开）
-> **本地路径**：`D:\Gemini\06_代码工程\deng_1949_rpg\`（目录名是旧的，没跟着改名）
-> **交接目标**：让接手的 Agent 不必重新摸索本机环境与历史坑点，直接能改代码、跑测试、出包发版。
+> **更新时间**：2026-09-27  
+> **开源仓库**：https://github.com/makisekurse/nijing （公开仓库）  
+> **法定工作区路径**：`D:\Gemini\06_代码工程\nijing\`  
+> **交接目标**：帮助接手的开发者/智能体全面掌握引擎架构、数据模型、核心不变量、历史踩坑经验与发版规范，无需摸索即可秒级定位、修改代码、运行单测并完成出包。
 
 ---
 
-## 一、这是什么
+## 一、项目定位与基本信息
 
-**拟境**（英文名 `nijing`，2026-09-25 由 `history-sim` 改名而来）是一个**世界书驱动的情境推演引擎**。
+**拟境**（英文名 `nijing`，由 `history-sim` 演进而来）是一个**世界书驱动的沉浸式情境推演引擎**。
 
-把自己放进一个世界，做一个行动，看这个世界如何回应。不是数值游戏 —— 没有血条、金币、属性面板。
-全屏是长篇小说的阅读质感，每一幕由用户自己配置的大模型实时生成。
+它不是数值游戏，没有血条、金币和等级面板；全屏呈现长篇小说的阅读质感，每一幕剧情由用户自配的 LLM 实时生成，文末给出可选行动分支，亦支持玩家输入任意自由行动。
 
-**应用零内置剧本。** 时代、身份、文风全部来自用户写的「世界书」。历史正剧、架空江湖、近未来都市都能跑。
-
-- **开发者署名**：`makisekurisu`（用户明确要求只署他一个人）
+- **应用零内置剧本**：时代背景、主角身份、关键人物、文风规则全部由外部「世界书」定义；
 - **包名**：`io.github.makisekurse.nijing`
-- **应用显示名**：拟境
+- **开发者署名**：`makisekurisu`（遵循用户严格要求，仅署此名）
+- **当前版本**：`v1.3.7+1`
+- **基线单测**：**164 项单元测试 100% 全绿（运行耗时 ~1 秒）**
 
 ---
 
-## 二、代码结构
+## 二、架构全景与目录结构
 
 ```
 lib/
-├── main.dart                    入口：配置加载 + 主题注入 + 生命周期落盘
+├── main.dart                          # 应用入口：配置加载、主题注入、生命周期落盘兜底
 ├── core/
-│   ├── app_info.dart            应用常量（名称/版本/仓库地址，版本由构建期注入）
-│   └── app_error.dart           错误分类
+│   ├── app_info.dart                  # 应用常量（名称/构建期注入的版本/仓库地址）
+│   └── app_error.dart                 # 错误分类体系（含 400 服务端错误明细透出）
 ├── models/
-│   ├── world_book.dart          世界书（12 个字段）
-│   ├── world_line.dart          ★ 世界线：history + chronicle + worldState + 分岔来源
-│   ├── save_slot.dart           ★ 存档槽 = 一本世界书 + 若干条世界线
-│   ├── chapter_node.dart        一幕节点（含每幕状态快照）
-│   ├── world_state.dart         结构化世界状态
-│   ├── annotation.dart          词条 / 人物志条目
-│   └── app_config.dart          全局配置（主题/字号/行距/排版/模型）
+│   ├── world_book.dart                # 世界书元数据与核心设定（12 个核心维度）
+│   ├── world_line.dart                # ★ 世界线模型：history + chronicle + worldState + 分岔关系
+│   ├── save_slot.dart                 # ★ 存档槽：一本世界书 + 若干条世界线
+│   ├── chapter_node.dart              # 单幕节点（内嵌每幕状态快照，用于分岔自愈）
+│   ├── world_state.dart               # 结构化世界状态（时间、地点、事实、关系、事件）
+│   ├── annotation.dart                # 词条 / 人物志 / 关系条目
+│   └── app_config.dart                # 全局配置（字体/排版/主题/主宰模式/思考模式/单幕字数）
 ├── data/
-│   ├── prefs_store.dart         SharedPreferences 封装（带写盘防抖 + flush）
-│   ├── secure_store.dart        API Key 加密存储
-│   └── world_book_repository.dart
+│   ├── prefs_store.dart               # SharedPreferences 封装（离散即刻落盘 + 生命周期 flush）
+│   ├── secure_store.dart              # API Key 系统安全加密存储
+│   └── world_book_repository.dart     # 世界书持久化仓库
 ├── services/
-│   ├── game_session.dart        ★ 状态与纯逻辑：分岔/切换/快照自愈/reroll
-│   ├── world_state_service.dart ★ 世界状态解析·合并·校验·截断
-│   ├── response_parser.dart     ★ 模型输出解析（四步流水线 + 模板占位过滤）
-│   ├── text_layout.dart         正文分段与缩进（可单测）
-│   ├── prompt_builder.dart      提示词三层组装
-│   ├── llm_client.dart          流式/非流式客户端
-│   ├── fallback_service.dart    拒答与截断的三级兜底
-│   ├── chronicle_service.dart   编年史压缩
-│   ├── save_service.dart        存档读写
-│   ├── world_builder_service.dart  AI 生成世界书
-│   ├── providers.dart           服务商与模型清单
-│   └── update_service.dart      检查更新
+│   ├── generation_controller.dart     # ★ 长生命周期推演控制器：按槽隔离状态机、流式缓冲、自动落盘
+│   ├── game_session.dart              # ★ 纯业务状态机：分岔、切换、快照自愈、重卷、选项恢复
+│   ├── world_state_service.dart       # ★ 状态解析、合并、字段校验、Prompt 渲染
+│   ├── response_parser.dart           # ★ 模型输出五步流水线、未闭合 think 断崖探测、思维防外泄
+│   ├── text_layout.dart               # 正文分段、排版清洗与缩进布局
+│   ├── prompt_builder.dart            # 提示词三层装配（含天道敕令注入与单幕字数下限约束）
+│   ├── llm_client.dart                # 流式 SSE 客户端（原生 reasoning 捕获、顶格 Token 预算分配）
+│   ├── providers.dart                 # 模型商端点解析、模型名智能归一化自愈、思考模式判定
+│   ├── fallback_service.dart          # 截断与异常三级兜底（restart 通知隔离、400 阻断防虚假章节）
+│   ├── file_export_service.dart       # Android FileProvider 真实物理文件系统分享
+│   ├── runtime_log.dart               # 运行日志（环形缓冲、内存批量淘汰、配置密钥绝对脱敏）
+│   ├── chronicle_service.dart         # 编年史增量压缩
+│   ├── save_service.dart              # 存档槽序列化与写盘
+│   ├── world_builder_service.dart     # AI 扩写生成世界书
+│   └── update_service.dart            # GitHub Release 自动检查更新
 └── ui/
-    ├── themes/app_theme.dart    四套皮肤 + ReadingPalette 阅读面色板
+    ├── themes/app_theme.dart          # 四套经典皮肤 + ReadingPalette 沉浸阅读色板
     ├── screens/
-    │   ├── home_shell.dart      底部三入口：世界 / 继续 / 我的
-    │   ├── worlds_tab.dart      世界列表
-    │   ├── continue_tab.dart    继续你的故事
-    │   ├── profile_tab.dart     我的
-    │   ├── reader_screen.dart   ★ 阅读页（世界线管理在这里）
-    │   ├── settings_screen.dart 设置（三个独立分区）
-    │   ├── worldbook_editor_screen.dart
-    │   ├── quick_create_screen.dart
-    │   ├── chronicle_screen.dart / cast_screen.dart / about_screen.dart
-    │   └── onboarding_screen.dart
-    └── widgets/                 choice_pill / free_input_bar / glossary_sheet
+    │   ├── home_shell.dart            # 首页底栏入口（世界 / 继续 / 我的）与槽位控制器清理
+    │   ├── reader_screen.dart         # ★ 沉浸阅读主界面（视口停泊、手势冲突防互殴、控制器订阅）
+    │   ├── worlds_tab.dart            # 世界书列表与管理
+    │   ├── continue_tab.dart          # 继续推演聚合页
+    │   ├── profile_tab.dart           # 个人与设置聚合
+    │   ├── settings_screen.dart       # 开发者选项（3000 字上限、思考开关、运行日志）
+    │   └── worldbook_editor_screen.dart # 世界书编辑器
+    └── widgets/
+        ├── live_thought_view.dart     # ★ 流式思考常驻面板（独立翻阅感知、展开状态托管）
+        ├── world_line_tree.dart       # ★ 世界线时空树弹层（严格外框对齐、转角分支、防文本穿透）
+        ├── choice_pill.dart           # 行动分支选择胶囊
+        ├── free_input_bar.dart        # 自由行动输入框（金色主宰模式光标、草稿焦点防丢失）
+        └── thought_sheet.dart         # 历史各幕思维链回溯弹层
 ```
-
-规模：41 个 dart 文件 / 约 8850 行 / 86 项单测。
 
 ---
 
-## 三、核心不变量（改代码前必读）
+## 三、七大核心架构与技术演进
 
-> **`history` · `chronicle` · `worldState` 三者必须永远处于同一个时间点。**
+### 1. 核心不变量：三位一体状态快照 (Snapshot Invariants)
+> **铁律：`history` · `chronicle` · `worldState` 三者必须永远处于同一个时间点。**
 
-实现方式：`ChapterNode` 上的**每幕快照** —— `chronicleAfter` / `worldStateAfter`。
+- 实现载体：`ChapterNode` 上的 `chronicleAfter` 与 `worldStateAfter` 快照；
+- 作用机制：分岔（`branchFrom`）、重新生成本幕（`reroll`）和编年史压缩时，绝不仅在存档顶层修改，必须严格基于那一幕的历史快照展开，确保回退或分岔时不会丢失前文局势或跨越时空污染；
+- 快照自愈：`GameSession` 构造时自动调用 `ensureSnapshots()`，缺失快照自动沿用前一幕，开篇第一幕赋精准空状态，自愈仅发生于内存，等用户保存时静默回写。
 
-- 只在存档顶层存一份「当前状态」是**分岔不到历史幕**的（顶层那份永远是最新的）
-- 分岔、reroll、编年史压缩三条路径都必须维护这个不变量
-- 逻辑集中在 `lib/services/game_session.dart`，**有单测覆盖**，别绕过它直接改状态
+### 2. 推演控制器生命周期解耦 (GenerationController)
+- **旧痛点**：旧版推演强绑定于 `ReaderScreen`，退出页面时其 `dispose()` 会粗暴调用 `_client.cancel()` 掐断请求，导致正在生成的长篇故事前功尽弃；
+- **新架构**：
+  - 引入 `GenerationController`，按 `slotId` 单例持久化托管；
+  - 拥有独立状态机（`idle` / `generating` / `streaming` / `completed` / `failed`）；
+  - `ReaderScreen` 作为纯粹的观察者（Subscriber），进入时 `attach` 恢复当前流式现场与思考面板展开状态；离开时仅 `detach` 取消 UI 监听，后台依然继续生成；
+  - 推演完成后，控制器在后台直接调用 `SaveService.upsert` 完成无感自动存档。
 
-### 快照自愈
+### 3. 深度思考模式 (Thinking / Reasoning Stream)
+- **常驻展示**：废除正文出现即卸载思考面板的限制，推演中只要产生思考，`LiveThoughtView` 常驻正文上方；
+- **原生分流**：`LlmClient` 实时监听阿里云百炼原生 `reasoning_content`，SSE chunk 不做破坏性正则清洗，通过 `ResponseParser.splitLive` 统一做 Markdown 规范化并严格保留段落空行；
+- **未闭合 think 断崖探测**：针对部分模型偶尔缺失 `</think>` 标签的问题，构建了五层智能断崖防护（元思维引导词前缀排除、指令性短语排除、小说标准引号对话识别、自然叙事短句识别、思维词统计），确保小说正文绝不被误吞入思考面板。
 
-旧存档可能缺快照（世界书自带开篇时，第一幕是在 UI 层直接构造的）。
-`GameSession` 构造时调 `ensureSnapshots()` 自愈：缺快照的幕取上一幕的快照，
-第一幕取空状态（它没跑过模型，状态本来就是空的 —— 对开篇场景是精确值）。
+### 4. 思考过程防泄露 (Thinking Leakage Guard)
+- **问题**：旧版 `_looksLikeNarrativeBody` 误将思考中引用的玩家行动（如 `思考：主角决定：“……”，需要把这一事实融入`）因含有引号误切分为小说正文，造成上半截卡在思考框、下半截外泄污染正文；
+- **重构**：`_looksLikeNarrativeBody` 设立严格守卫：
+  1. 命中 `思考：`、`推演：`、`分析：` 等前缀一律禁止切出；
+  2. 包含 `不要反转`、`需要把`、`决定：“`、`天道敕令` 等指令语言一律禁止切出；
+  3. 只有以引号开头的标准角色小说对话、或不含任何元思维关键词的自然文学描写才判定为正文。
 
-自愈**只在内存里做**，等用户下次正常保存时自然写回。
+### 5. 双层滚动脱困与视口停泊 (Scroll Decoupling)
+- **问题**：流式生成时外部页面强制跟随滚底，而思考面板内部也每字强制 `jumpTo`，导致用户手指在屏幕上翻看时被疯狂拽回底部；
+- **脱困机制**：
+  1. `LiveThoughtView` 增加内部 `_userScrolledUp` 状态：当检测到距离底端超过 28px 时，立即锁定自动滚动，把翻阅权完整归还给用户；划回底端自动恢复；
+  2. `ReaderScreen` 将跟随阈值精简至 48px，并挂载 `Listener` 追踪原始触摸（`_activePointer`），**在用户手指按在屏幕上或向上翻阅期间，绝对禁止触发任何 `animateTo` 动画**；
+  3. 视口向上停泊时，右下角优雅浮现「↓ 有新内容流出」气泡胶囊，点击平滑回滚至最新行。
 
----
+### 6. 单幕 3000 字与顶格 Token 扩容 (16384 Token Budget)
+- **单幕字数支持**：`AppConfig.maxWords` 开放 200..3000 字区间，提示词 `PromptKernel.build` 动态按 85% 注入强力字数下限约束（3000 字时约束 2550 字以上），彻底解决大模型草率收束；
+- **Token 顶格预算**：在开启深度思考时，针对模型长篇思索动辄消耗 3000+ tokens 的特点，`calculateMaxTokens` 公式重构为 `math.max(12288, maxWords * 5).clamp(4096, 16384)`，默认赋予 **12288 ~ 16384 tokens** 的充裕空间，彻底根除百炼服务端因 Token 撞墙而掐断连接（`Connection closed while receiving data`）。
 
-## 四、世界线机制（当前的核心特性）
-
-### 数据模型
-
-```
-SaveSlot（= 一局推演）
-├── worldBook          内嵌世界书快照（世界书被改/删也能打开）
-├── lines: WorldLine[] 若干条世界线，**永不为空**
-├── activeLineId       当前所在
-└── createdAt / updatedAt
-
-WorldLine（= 一条世界线）
-├── history / chronicle / worldState   自带三件套 → 天然互不干扰
-├── parentLineId / branchedAtChapter   从哪条线、第几幕分出来
-└── baseState / baseChronicle          分岔点**之前**的状态
-```
-
-### 行为
-
-```
-主线        第1幕 ── 第2幕 ── 第3幕 ── 第4幕      ← 原样保留
-                    │
-世界线 2             └── 第2幕' ── 第3幕'          ← 重新做选择
-```
-
-- **分岔**：`GameSession.branchFrom(index)` —— 新线保留 1..index+1 幕，
-  `chronicle`/`worldState` 恢复到那一幕的快照，并自动切过去。**原线完全不动**。
-- **切换**：`switchLine(id)` —— 四件套整体换成那条线的。
-- **重命名 / 删除**：`renameLine` / `deleteLine`（至少保留一条）。
-- **`baseState` 的用途**：在分岔点那一幕点「重新生成本幕」时，状态要退回分岔点**之前**，
-  而不是退成空 —— 否则这条线会丢掉分岔时继承来的全部局势。
-
-> 早先的「回滚」是**单向销毁**：丢掉后面的幕，只留一个会被下次覆盖、
-> 而且没有任何入口能再打开的备份槽。世界线分支取代了它。
-> `SaveSlot.backupIdPrefix` / `isBackup` 保留着，仅用于识别与清理旧数据。
-
-### 一本书一局
-
-进入世界时如果这本书**已有存档就接着玩**，没有才新建。所以「最近推演」里一本书只有一条。
-想重开走世界书长按菜单的「重新开始一局」（整槽重置成一条新主线，带确认）。
+### 7. 运行日志与真实物理文件分享 (Export & Logging)
+- **物理文件导出**：通过 Android FileProvider 原生通道，故事（.md / .txt）与运行日志（.txt）直接导出至公共存储并唤起系统分享面板，告别巨型纯文本粘贴导致的手机卡死；
+- **双重精准脱敏**：`RuntimeLog` 既对标准前缀（`sk-`、Bearer 等）进行通用模糊，又与 `SecureStore` 绑定的真实 `configuredApiKey` 进行全值精准脱敏，保证导出日志绝对安全。
 
 ---
 
-## 五、模型输出契约
+## 四、模型输出契约与标签体系
 
-模型每幕必须返回带标签的结构。**五个块全是元数据，读者不该看见**，只有正文进阅读区：
+推演生成严格遵循结构化契约，正文之外的结构全部封装在标签内（用户阅读区只展示纯净正文）：
 
-```
-<date>剧中日期</date>
-
-<choices>
-可选行动一
-可选行动二
-</choices>
-
-<glossary>
-词条|解释
-</glossary>
-
-<cast>
-姓名|身份|立场
-</cast>
-
-<state>
-时间：… / 地点：… / 事实：…；… / 关系：姓名|态度；… / 事件：…；…
-</state>
-```
-
-- 缺 `<choices>` → 判定截断 → 走三级兜底（`fallback_service.dart`）
-- 解析在 `response_parser.dart`：标签定位 → 结构块切分 → 结构化提取 → 正文重建
-- **不做过度正文清洗**：正文里的 `名字|身份|立场` 行只要不在结构块内就原样保留
-
-### ⚠️ 提示词里绝不能出现可被照抄的内容行
-
-这是踩过的坑：内核提示词原本写的是
-
-```
-<choices>
-第一条可供主角决断的具体行动（一句话，30~60 字）
-第二条可供主角决断的具体行动
-第三条（可选）
-</choices>
-```
-
-模型把这四行当成「格式的一部分」原样抄进了输出，界面上出现了
-「第一条可供主角决断的具体行动（一句话，30~60 字）」混在真实选项里，
-正文里也混进了「（正文：约 500 字的白描叙事）」。
-
-**现在内核是「空骨架 + 散文说明」** —— 骨架里标签内部一律留空，
-内容要求全部写在骨架之外。解析器再加一道 `isTemplateNoise` / `isBodyNoise` 兜底。
-正文的过滤刻意比列表项**更窄**（正文是文学文本，宁可漏杀不能误杀 ——
-`〈〉` 书名号在中文小说里合法，不在正文里过滤）。
-
-**改提示词时务必守住这条。**
-
----
-
-## 六、主题与阅读体验
-
-四套皮肤（`ui/themes/app_theme.dart`）：
-
-| id | 名称 | 定位 |
+| 标签 | 内容 | 处理方式 |
 |---|---|---|
-| `mirage` | 拟境 | 冷调深墨 + 雾蓝，**默认**，为沉浸式推演设计 |
-| `vintage` | 时代报章 | 暖纸 + 砖红 |
-| `dark` | 暗夜墨石 | 暖黑 + 橘调 |
-| `parchment` | 素雅宣纸 | 亮白纸面 |
-
-阅读页不用 Material 语义色，而是一套 **`ReadingPalette`**（ThemeExtension）：
-页面底色 / 正文墨色 / 极淡分隔线 / 幕首标记色 / 选项卡底色。四套皮肤各自调过。
-
-阅读设置里可调：主题、字号、行距、**段首缩进（顶格/一格/两格）**、
-**段间距（紧凑/适中/宽松）**、打开时跳到最新一幕、顶栏自动隐藏。
-
-### 段首缩进必须用 WidgetSpan，不能用空白字符
-
-`TextLayout.indent()` 生成的 U+3000 前缀在实机上**不生效** ——
-代码与配置链路都验过是对的，问题在文本排版层把行首空白吃掉了
-（两端对齐时行首空白被当 hanging whitespace 处理）。
-
-现在用 `WidgetSpan(child: SizedBox(width: n * fontSize))`：占位盒子是布局实体，
-shaper 折叠不了它，缩进**必然**生效。见 `reader_screen.dart` 的 `_paragraph()`。
-
-### 沉浸模式与手势
-
-- 进推演页 `SystemChrome.setEnabledSystemUIMode(immersiveSticky)`，退出恢复 `edgeToEdge`
-- 单击唤出顶栏用 **`Listener` 监听原始指针事件**（在手势竞技场之前触发，不会被
-  `SelectionArea` 抢走），判断条件**只有一个：指针有没有拖动**。
-  ⚠️ 别再加"是否有选中文字""落点是否在底部"之类的守卫 —— 加过一次，
-  任一判断卡住就让顶栏彻底唤不出来。
+| `<think>` | 思维链推理过程 | 实时剥离至 `LiveThoughtView`，不污染正文 |
+| `<date>` | 故事当下剧中日期 | 提取并更新当前幕的展示日期 |
+| `<choices>` | 2~3 个可选行动 | 渲染为底部的选项卡，支持重卷与恢复 |
+| `<glossary>` | 词条\|释义 | 增量合并入词条字典，点选可看释义 |
+| `<cast>` | 姓名\|身份\|立场 | 增量合并入人物志 |
+| `<state>` | 时间、地点、事实、关系、事件 | 结构化合并更新为下一幕的 `worldState` |
 
 ---
 
-## 七、本机环境与三大坑（极其重要）
+## 五、工程铁律与踩坑经验（★ 必读准则）
 
-### 工具链路径
+### 铁律 1：真实报文证据先行，严禁盲猜打补丁 (Evidence-First Debugging)
+- **百炼 400 惨痛教训**：前期在排查百炼报 400 时，盲目猜测是“参数冲突”、“模型名变体”或“max_tokens 越界”，打了一堆防御补丁却未触及真实原因。直到用户拿出真机运行日志，上面清晰记载：`HTTP 400 · {"error":{"message":"Workspace endpoint is invalid."}}`，才瞬间找到真凶；
+- **准则**：遇到任何 API 报错、网络异常或系统故障，**必须以服务端返回的真实响应体（Response Body）、实际拼装的完整请求 URL/Query/Headers 及真实日志为第一事实依据**。信息不足时第一动作是打印/透出错误报文，严禁在未见真实报错前凭空瞎猜。
 
-| 项 | 路径 |
-|---|---|
-| Flutter | `D:\dev\flutter\bin\flutter.bat`（3.47.5 stable） |
-| JDK | `D:\dev\jdk17` |
-| Android SDK | `D:\dev\android-sdk` |
-| Gradle 缓存 | `D:\dev\gradle-home` |
-| 签名密钥 | `D:\workbuddy工作空间\测试签名密钥\test-signing.jks`，alias `anerycoft`，口令 `android` |
-| GitHub Token | `D:\dev\ghtok.txt` |
+### 铁律 2：跨层参数语义严格隔离，严禁李代桃僵 (Semantic Parameter Isolation)
+- **教训**：在调用层误将本地存档槽位 `slotId: "hmm680l2yg"` 偷换概念传给了百炼的 `workspaceId: slotId`，导致 Base URL 被篡改为专属租户域名 `https://hmm680l2yg.cn-beijing.maas.aliyuncs.com/...`，直接被网关拦截；
+- **准则**：严禁将业务层内部 ID 随意代入底层协议参数；非百炼专属企业工作空间场景，`workspaceId` 必须显式留空。
 
-### ⛔ 坑 1：卡巴斯基拦截命名管道 → 所有 flutter 命令必须提权
+### 铁律 3：双层滚动与高频流式的触摸抑制
+- 在有流式输出和自动滚底的界面中，一旦用户手指按在屏幕上（`_activePointer != null`）或有主动向上划动倾向，**必须无条件暂停一切程序化的自动滚动动画**，绝不能与用户手势在同一帧内互殴。
 
-降权进程下 Dart 无法创建子进程管道，`flutter analyze/build/test` 全部秒崩，报
-`CreateFile failed 231 (所有的管道范例都在使用中。)`。
+### 铁律 4：段首缩进必须用 WidgetSpan，绝不能用空白字符
+- 中文字符 `\u3000` 在 Flutter 两端对齐排版时会被文本 Shaper 当作挂起空白折叠吃掉；必须使用 `WidgetSpan(child: SizedBox(width: n * fontSize))` 实体盒子实现物理占位。
 
-**解决**：用 `D:\dev\elev_flutter.py <mode> <proj>` 提权执行（mode: pub/analyze/test/icons/build）。
-日志写到 `D:\dev\elev_<mode>.log`。
-
-### ⛔ 坑 2：Dart 分析器在中文路径下崩溃
-
-工程路径含 `06_代码工程`，`flutter analyze` 会因 LSP 消息截断崩掉
-（`FormatException: Unexpected end of input`）。
-
-**解决**：用 ASCII 路径的目录联接 —— `D:\dev\nijing_verify` → 工程真实路径，
-在这个联接路径下执行 flutter 命令。
-
-### ⛔ 坑 3：工作文件夹无法在会话内改名
-
-`deng_1949_rpg` 这个名字是旧的，但**改不动** —— WorkBuddy 自身持有目录句柄
-（工作区根目录就是它），普通权限和提权都失败（`WinError 32`）。
-
-⚠️ **更危险的是**：`shutil.move` 在 `os.rename` 失败后会走「复制再删除」兜底，
-中断会留下残缺副本（实测留下过 2.5 GB 残骸）。
-**不要用 `shutil.move` 兜底 rename，失败了就直接报错。**
+### 铁律 5：Windows 上时间戳分辨率不足会撞 ID
+- `DateTime.now()` 在 Windows 上精度仅约 1ms，高频分岔时会生成相同 ID 导致状态串线；所有新 ID 必须拼接进程级自增序号（`newId()`）。
 
 ---
 
-## 八、出包与发版
+## 六、开发、测试与出包指南
 
-### 本地构建
-
-```bash
-# 走提权包装器（坑 1），不要直接调 flutter
-python D:\dev\elev_flutter.py build D:\dev\nijing_verify
+### 1. 运行测试
+统一采用现代化 PowerShell 7+ (`pwsh`) 执行测试：
+```powershell
+flutter test test/nijing_test.dart
 ```
+> **全绿指标**：164/164 项测试秒级通过，新增任何特性必须编写单测，确保 0 回归。
 
-⚠️ **必须显式 `--target-platform android-arm64`**：Flutter 的 Gradle 插件会绕过
-`android` 里的 `ndk.abiFilters`，只用 abiFilters 的话三个 ABI 全都会打进包里
-（实测 51 MB vs 18.8 MB）。脚本里已带。
-
-### CI
-
-`.github/workflows/android.yml`，**出包与发版分离**：
-
-| 触发 | 行为 |
-|---|---|
-| 推 `main` / 手动 | 只构建 + 上传 Artifact，**不发版** |
-| 推 `v*` 标签 | 构建 + **发布 Release**（这一步才算"发包"） |
-
-版本号由 `Resolve version` 步骤决定：**推标签时以标签为准**，
-推 main 时用 `run_number`（只增不减）。这样 Release 标签与包内 versionName 对得上。
-
-仓库 Secret：`TEST_KEYSTORE_BASE64`（固定签名密钥的 base64）。
-没配会退回 debug 签名 —— 那样每个包签名不同，无法覆盖安装。
-
-### 交付规矩（用户明确要求）
-
-1. 每次交付必须说清 **commit 短 SHA + 改了什么 + 版本号**
-2. **版本号只增不减**
-3. **不自己随便推** —— 用户说推才推
-4. **默认只走 GitHub Release 给直链**，不要用本地文件发送
-5. 签名必须固定，**禁止** `keytool -genkeypair` 现场生成
-6. ⭐ **只要发包就必须同时更新 README** —— 顺序：改代码 → 改 README → 提交 → 打标签发版
-
----
-
-## 九、测试
-
-```bash
-python D:\dev\elev_flutter.py test D:\dev\nijing_verify
+### 2. 本地构建 Release APK
+```powershell
+flutter build apk --release --target-platform android-arm64
 ```
+产物位于 `build/app/outputs/flutter-apk/app-arm64-v8a-release.apk`（约 19.1 MB）。
 
-**86 项，必须全过。** 覆盖四类最容易出隐蔽 bug 的地方：
-
-- **世界线分岔与切换** —— 分岔后原线是否完全不动、新线是否继承到分岔点、
-  两线是否互不干扰、切换后四件套是否跟着换、分岔点重生成是否退回 `baseState`
-- **快照一致性** —— 三者是否同点、旧存档缺快照能否自愈
-- **世界状态的解析、合并与截断** —— 畸形输入不抛异常、关系走增量、总预算兜底
-- **模型输出解析与正文排版** —— 10 类畸形标签写法、模板占位过滤、正文分段
-
----
-
-## 十、踩坑记录（后来的 Agent 优先看这里）
-
-### 1. `DateTime.now()` 在 Windows 上分辨率只有约 1ms —— id 会撞号
-
-`WorldLine.newId()` 原本是 `DateTime.now().microsecondsSinceEpoch.toRadixString(36)`。
-同一毫秒内连续调用**返回完全相同的值**，于是新建存档时给主线生成的 id
-和紧接着分岔出来的新世界线 id 撞号 → 两条线 id 相同 → `activeLine` 按 id 查找时
-永远返回第一条 → **切到新线后读到的还是旧线的进度**。
-
-**修法**：拼一个进程内自增序号。见 `world_line.dart` 的 `newId()`。
-
-**通用教训：任何"用时间戳当唯一 id"的地方都要检查这个。**
-
-### 2. 懒加载列表的 `maxScrollExtent` 首帧不可信
-
-`ListView` 是懒加载的，首帧之后 `maxScrollExtent` 只反映**已经铺出来**的那部分，
-直接 `jumpTo(maxScrollExtent)` 会落在半路。
-
-**正解**：给目标挂 `GlobalKey`，先 `Scrollable.ensureVisible` 定位，下一帧再补一次到底。
-
-### 3. 设置防抖写入从未落盘
-
-`PrefsStore.flush()` 写了但**从来没被调用过**，也没有生命周期监听。
-700ms 防抖窗口内退出应用，设置就丢了 —— 表现为「设置没生效」。
-
-**修法**：离散选择（主题/字号/开关/选模型）改成立即落盘；
-`main.dart` 加 `WidgetsBindingObserver`，在 paused/hidden/detached 时 flush 兜底。
-
-### 4. 用"看不见"换"数得对"是错的
-
-为了修「推演数量虚高」，把备份槽从列表里过滤掉了 —— 数量是准了，
-但唯一的查看入口也堵死了。**该做的是给它一个正当的家，不是藏起来。**
-
-### 5. 别用"保守兜底"掩盖数据缺失
-
-`rollbackTo` 里原本有 `if (target.worldStateAfter != null)` 的守卫，
-本意是"旧存档没快照就别回退"。但它把**数据缺失变成了静默跳过** ——
-回滚后状态停在后来的幕，界面上完全看不出哪里错了。
-**状态恢复路径上要么显式补齐，要么显式报错，不要静默。**
-
-### 6. 两个看起来无关的现象，先找共同根因
-
-「继续进入跳回第一幕」和「最近推演每进一次多一条」用户是分开报的，
-实际是同一行代码（每次都 `SaveSlot.newId()` 建新槽）造成的。
-**别分别打补丁。**
-
-### 7. 守卫条件越加越糟
-
-顶栏唤出加过两个"精确"守卫（有选中文字 / 落点在底部），
-任一卡住就让功能彻底失效。**可靠性优先于精确性** ——
-宁可偶尔多触发一次，也不要让功能彻底不能用。
+### 3. GitHub Actions 自动发版
+仓库通过 `.github/workflows/android.yml` 自动化出包：
+1. 更新 `pubspec.yaml` 版本号（如 `1.3.7+1`）；
+2. 更新 `README.md` 与本文档；
+3. 提交并推送到 GitHub 主干：
+   ```powershell
+   git add .
+   git commit -m "feat: 你的改动说明 (v1.3.7)"
+   git push origin main
+   ```
+4. 打标签并推送触发发版：
+   ```powershell
+   git tag -a v1.3.7 -m "v1.3.7 详细改动"
+   git push origin v1.3.7
+   ```
+5. GitHub Actions 自动构建并在 Releases 页面生成对应的发布产物。
 
 ---
 
-## 十一、已知待办
+## 七、关键代码文件索引
 
-- **`GameSession` 只拆了状态与纯逻辑**；流式渲染与交互仍在 `reader_screen.dart`（约 1400 行）。
-  彻底的 controller 化（把流式也搬出去 + 改 setState 粒度）还没做 —— 纯重构，无用户可见收益。
-- **世界线还没有跨槽的全局视图**。目前切换入口在阅读页的「世界线」里，
-  从首页进不去。
-- **没有截图**。README 有截图会好读很多。
-- **屏幕常亮**（阅读时不息屏）没做 —— 需要引原生插件，一直没排期。
-- **`verticalText`（竖排阅读）已删除**。它原本是假实现（只加大字距，不是真竖排排版）。
-  要做真竖排得换渲染方式。
-
----
-
-## 十二、给接手者的建议顺序
-
-1. 先读 `lib/services/game_session.dart` 与 `lib/models/world_line.dart` —— 这是全局最核心的两块
-2. 再读 `reader_screen.dart` 的 build + `_paragraph` + 世界线那几个方法
-3. 跑一遍 `python D:\dev\elev_flutter.py test D:\dev\nijing_verify` 确认基线是绿的
-4. 改完必须：`analyze` 零问题 → `test` 全过 → 更 README → 提交 → 打标签发版
+| 模块 | 核心文件 | 关键职责 |
+|---|---|---|
+| **推演控制** | `lib/services/generation_controller.dart` | 独立生命周期控制器、状态机、后台落盘 |
+| **状态演算** | `lib/services/game_session.dart` | 分岔逻辑、世界线切换、快照自愈、选项恢复 |
+| **输出解析** | `lib/services/response_parser.dart` | 结构化标签提取、未闭合 think 智能截断、思维防外泄 |
+| **网络调用** | `lib/services/llm_client.dart` | SSE 流式通信、reasoning 流提取、16384 Token 预算 |
+| **模型调度** | `lib/services/providers.dart` | 服务商 Base URL 解析、模型名智能自愈、参数隔离 |
+| **阅读界面** | `lib/ui/screens/reader_screen.dart` | 沉浸阅读视口、触摸手势防打架、视口停泊 |
+| **思考面板** | `lib/ui/widgets/live_thought_view.dart` | 常驻思考展示、折叠保持、独立划动感知 |
+| **世界线树** | `lib/ui/widgets/world_line_tree.dart` | 时空树可视化、卡片严密对齐、文本防溢出 |
+| **单测套件** | `test/nijing_test.dart` | 164 项全量测试集 |

@@ -346,32 +346,55 @@ class ResponseParser {
   /// 判定某一段是否具备文学小说自然叙事特征（而非元思维分析）。
   static bool _looksLikeNarrativeBody(String text,
       {required bool isFirstPara}) {
-    if (text.isEmpty) return false;
+    final t = text.trim();
+    if (t.isEmpty) return false;
 
-    // 排除列表式输出（如 1. 2. - *）
-    final isList = RegExp(r'^\s*[-*•\d+\.]').hasMatch(text);
+    // 1. 排除列表式输出（如 1. 2. - *）
+    final isList = RegExp(r'^\s*[-*•\d+\.]').hasMatch(t);
     if (isList) return false;
 
-    final hasDialogue = text.contains('“') ||
-        text.contains('「') ||
-        text.contains('”') ||
-        text.contains('」');
-    // 如果包含人物对话，直接判定为正文叙事（思考过程绝不会出现角色直接对话）
-    if (hasDialogue) return true;
+    // 2. 严禁以元思维引导词开头（如「思考：」「推演：」「分析：」「思路：」「注意：」）
+    final isMetaPrefix = RegExp(
+      r'^(?:思考|推演|分析|思路|梳理|构思|注意|设计|总结|盘点|决策|规划|写作)[：:]',
+    ).hasMatch(t);
+    if (isMetaPrefix) return false;
 
-    var metaCount = 0;
-    for (final kw in _metaKeywords) {
-      if (text.contains(kw)) metaCount++;
+    // 3. 排除明确的思维分析与指令性语言（避免思考中脑暴或引用指令时被误判为正文）
+    final isMetaDirective = t.contains('不要反转') ||
+        t.contains('不要有标签') ||
+        t.contains('正文中不要') ||
+        t.contains('需要把') ||
+        t.contains('可以开头') ||
+        t.contains('决定：“') ||
+        t.contains('规则要求') ||
+        t.contains('既成事实') ||
+        t.contains('天道敕令') ||
+        t.contains('主宰模式') ||
+        t.contains('剧情推进');
+    if (isMetaDirective) return false;
+
+    // 4. 标准角色小说对话判定：以引号开头的小说对话，如「“当务之急是弄清他的动机。”林砚低声道...」
+    final isDialogueStart = t.startsWith('“') || t.startsWith('「');
+    if (isDialogueStart) {
+      if (t.contains('”') || t.contains('」')) {
+        return true;
+      }
     }
 
-    final hasTerminal = text.contains('。') ||
-        text.contains('！') ||
-        text.contains('？') ||
-        text.contains('……') ||
-        text.contains('——');
+    // 5. 自然叙事正文判定：严禁存在思维分析关键词
+    var metaCount = 0;
+    for (final kw in _metaKeywords) {
+      if (t.contains(kw)) metaCount++;
+    }
+    if (metaCount > 0) return false;
 
-    // 无思维词且具备中文句式标点（支持短句氛围开篇如「夜色深沉。」）
-    return metaCount == 0 && hasTerminal && text.length >= 4;
+    final hasTerminal = t.contains('。') ||
+        t.contains('！') ||
+        t.contains('？') ||
+        t.contains('……') ||
+        t.contains('——');
+
+    return hasTerminal && t.length >= 4;
   }
 
   /// 按位置剔除所有结构块跨度，其余原样保留。

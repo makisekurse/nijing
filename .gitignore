@@ -49,3 +49,6 @@ app.*.map.json
 
 # WorkBuddy AI 本地会话/记忆状态，不进仓库
 .workbuddy-ai/
+
+# 安装包不进源码版本控制
+*.apk

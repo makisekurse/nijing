@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:http/http.dart' as http;
 
@@ -76,11 +77,15 @@ class LlmClient {
   ///
   /// - 针对特定硬限模型（如百炼 `qwen-plus` 官方硬限 [1, 2000]），严格将安全上限截断在 2000；
   /// - 针对 DeepSeek 官方端点常见上限 4096；
-  /// - 默认按字数约 3 倍比例配置，保底 2048，上限 16384。
+  /// - 深度思考模式（enableThinking == true）：
+  ///   由于 max_tokens 包含思考链与正文总和，为防止长思考耗尽预算导致服务端切断连接，
+  ///   顶格提供充裕空间：保底 12288，上限 16384。
+  /// - 普通无思考模式：默认按字数约 3 倍比例配置，保底 2048，上限 16384。
   static int calculateMaxTokens(
     int maxWords, {
     String? modelName,
     String? provider,
+    bool enableThinking = false,
   }) {
     final normalized = Providers.normalizeModelName(modelName ?? '');
     final model = normalized.toLowerCase().trim();
@@ -100,6 +105,13 @@ class LlmClient {
     if (provider == 'deepseek' || model.startsWith('deepseek')) {
       return (maxWords * 3).clamp(1024, 4096);
     }
+
+    if (enableThinking) {
+      // 深度思考模式：思考过程 + 正文双重空间保障，彻底避免交接处撞墙超时切断
+      final calculated = math.max(12288, maxWords * 5);
+      return calculated.clamp(4096, 16384);
+    }
+
     return (maxWords * 3).clamp(2048, 16384);
   }
 
@@ -124,6 +136,7 @@ class LlmClient {
         config.maxWords,
         modelName: model,
         provider: config.apiProvider,
+        enableThinking: config.enableThinking,
       ),
     };
     // 思考模式控制：严格按服务商与特定模型隔离注入。

@@ -328,7 +328,9 @@ class _ReaderScreenState extends State<ReaderScreen>
     if (!_scroll.hasClients) return;
     final max = _scroll.position.maxScrollExtent;
     final cur = _scroll.position.pixels;
-    final isBottom = (max - cur) < 120;
+    // 只要距离底端大于 48px 即判定用户在往上翻阅前文，立即停止跟随；
+    // 避免 120px 阈值过大导致用户刚往上滑一点又被强行拽回底部。
+    final isBottom = (max - cur) <= 48;
     if (isBottom != _atBottom) {
       setState(() {
         _atBottom = isBottom;
@@ -340,9 +342,10 @@ class _ReaderScreenState extends State<ReaderScreen>
   }
 
   void _follow() {
-    if (!_atBottom) return;
+    // 用户手指正按在屏幕上或不在最底端时，坚决不发起任何滚动动画，杜绝手势与动画互殴
+    if (!_atBottom || _activePointer != null) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scroll.hasClients) return;
+      if (!_scroll.hasClients || !_atBottom || _activePointer != null) return;
       _scroll.animateTo(
         _scroll.position.maxScrollExtent,
         duration: const Duration(milliseconds: 180),

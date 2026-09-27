@@ -26,11 +26,24 @@ class LiveThoughtView extends StatefulWidget {
 class _LiveThoughtViewState extends State<LiveThoughtView> {
   late bool _expanded;
   final ScrollController _scroll = ScrollController();
+  bool _userScrolledUp = false;
 
   @override
   void initState() {
     super.initState();
     _expanded = widget.initialExpanded;
+    _scroll.addListener(_onInternalScroll);
+  }
+
+  void _onInternalScroll() {
+    if (!_scroll.hasClients) return;
+    final max = _scroll.position.maxScrollExtent;
+    final cur = _scroll.position.pixels;
+    // 距离底端大于 28px 判定为用户在主动向上查阅上文
+    final scrolledUp = (max - cur) > 28;
+    if (scrolledUp != _userScrolledUp) {
+      _userScrolledUp = scrolledUp;
+    }
   }
 
   @override
@@ -40,9 +53,10 @@ class _LiveThoughtViewState extends State<LiveThoughtView> {
         widget.initialExpanded != _expanded) {
       _expanded = widget.initialExpanded;
     }
-    if (_expanded && widget.thought.length != oldWidget.thought.length) {
+    // 仅在用户停留在底端时自动跳底；若用户在向上翻看则绝不强行拽底打扰
+    if (_expanded && !_userScrolledUp && widget.thought.length != oldWidget.thought.length) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!_scroll.hasClients) return;
+        if (!_scroll.hasClients || _userScrolledUp) return;
         _scroll.jumpTo(_scroll.position.maxScrollExtent);
       });
     }
@@ -50,6 +64,7 @@ class _LiveThoughtViewState extends State<LiveThoughtView> {
 
   @override
   void dispose() {
+    _scroll.removeListener(_onInternalScroll);
     _scroll.dispose();
     super.dispose();
   }

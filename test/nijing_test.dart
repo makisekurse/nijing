@@ -2436,6 +2436,42 @@ final x = 1;
         'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
       );
     });
+
+    test('v1.3.7 · 深度思考顶格 Token 扩容：保底 12288，上限拉满 16384', () {
+      // 开启思考模式下：保底 12288，即使是 1000/1400 字也直接给到 12288
+      expect(LlmClient.calculateMaxTokens(1000, enableThinking: true), 12288);
+      expect(LlmClient.calculateMaxTokens(1400, enableThinking: true), 12288);
+      // 3000 字上限时：拉满到 15000 / 16384 边界
+      expect(LlmClient.calculateMaxTokens(3000, enableThinking: true), 15000);
+      // 普通模式保持原样，不干扰旧逻辑
+      expect(LlmClient.calculateMaxTokens(1400, enableThinking: false), 4200);
+      // 百炼硬限模型不受 enableThinking 干扰，保持安全区间
+      expect(LlmClient.calculateMaxTokens(1400, modelName: 'qwen-plus', enableThinking: true), 2000);
+    });
+
+    test('v1.3.7 · 思考过程包含引号指令与脑暴时绝不外泄至正文', () {
+      const raw = '''
+<think>
+思考：主角决定：“在我发出告全体人民书后，就已经获得了人民群众排山倒海般的大力支持”需要把这一事实融入。可以开头：告全体人民书播出去后，上海市委大楼的电话像海潮一样涌来。不要反转。写群众支持的具体场景。
+
+正文中不要有标签说明。要直接写作。
+</think>
+
+上海市委大楼的门外，工人们举着红旗列队进发，汽笛声此起彼伏。
+
+<choices>
+1. 接听电话
+2. 走出大楼
+</choices>
+''';
+      final p = ResponseParser.parse(raw);
+      expect(p.thought, contains('思考：主角决定'));
+      expect(p.thought, contains('不要反转'));
+      expect(p.body, isNot(contains('思考：主角决定')));
+      expect(p.body, isNot(contains('不要反转')));
+      expect(p.body, contains('上海市委大楼的门外'));
+      expect(p.choices.length, 2);
+    });
   });
 }
 
