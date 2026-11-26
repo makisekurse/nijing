@@ -11,6 +11,8 @@ import '../../services/runtime_log.dart';
 import '../../services/text_layout.dart';
 import '../../state/config_provider.dart';
 import '../themes/app_theme.dart';
+import '../themes/surface_ladder.dart';
+import '../widgets/app_toast.dart';
 import '../widgets/settings_model_section.dart';
 
 enum SettingsSection { model, advanced, reading, debug, all }
@@ -207,7 +209,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget _buildReadingSection(
     AppConfig cfg,
     ReadingPalette palette,
-    dynamic ladder,
+    SurfaceLadder ladder,
   ) {
     final activePreset = AppTheme.presets.firstWhere(
       (p) => p.id == cfg.themeMode,
@@ -461,14 +463,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     }
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          res.success
-              ? '运行日志已保存至：${res.path}'
-              : '导出失败：${res.message}',
-        ),
-      ),
+    AppToast.show(
+      context,
+      res.success
+          ? '运行日志已保存至：${res.path}'
+          : '导出失败：${res.message}',
     );
   }
 
@@ -481,13 +480,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     AppConfig cfg,
     ThemePreset preset,
     ReadingPalette palette,
-    dynamic ladder,
+    SurfaceLadder ladder,
   ) {
     final selected = cfg.themeMode == preset.id;
     final swatch = AppTheme.paletteOfId(preset.id);
-    return InkWell(
-      borderRadius: BorderRadius.circular(12),
-      onTap: () {
+    return FTappable(
+      onPress: () {
         HapticFeedback.selectionClick();
         _apply(cfg.copyWith(themeMode: preset.id), immediate: true);
       },
@@ -531,7 +529,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     required List<List<String>> options,
     required String selected,
     required ReadingPalette palette,
-    required dynamic ladder,
+    required SurfaceLadder ladder,
     required ValueChanged<String> onPick,
   }) {
     return Row(
@@ -541,9 +539,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         for (final opt in options)
           Padding(
             padding: const EdgeInsets.only(left: 6),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(9),
-              onTap: () {
+            child: FTappable(
+              onPress: () {
                 HapticFeedback.selectionClick();
                 onPick(opt[0]);
               },

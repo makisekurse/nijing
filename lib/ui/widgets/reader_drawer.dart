@@ -8,6 +8,7 @@ import '../../models/world_book.dart';
 import '../../models/world_line.dart';
 import '../../models/world_state.dart';
 import '../themes/app_theme.dart';
+import '../themes/surface_ladder.dart';
 import 'world_line_tree.dart';
 
 /// 右侧统一世界信息抽屉（`forui` `showFSheet(side: FLayout.rtl)`）。
@@ -42,58 +43,61 @@ class ReaderDrawer {
       context: context,
       side: FLayout.rtl,
       mainAxisMaxRatio: 0.86,
-      builder: (ctx) => _ReaderDrawerContent(
-        book: book,
-        worldState: worldState,
-        chronicle: chronicle,
-        history: history,
-        lines: lines,
-        activeLineId: activeLineId,
-        busy: busy,
-        onJumpToChapter: (idx) {
-          Navigator.pop(ctx);
-          onJumpToChapter(idx);
-        },
-        onSelectLine: (l) {
-          Navigator.pop(ctx);
-          onSelectLine(l);
-        },
-        onRenameLine: (l) {
-          Navigator.pop(ctx);
-          onRenameLine(l);
-        },
-        onDeleteLine: (l) {
-          Navigator.pop(ctx);
-          onDeleteLine(l);
-        },
-        onPickBranch: () {
-          Navigator.pop(ctx);
-          onPickBranch();
-        },
-        onOpenCast: () {
-          Navigator.pop(ctx);
-          onOpenCast();
-        },
-        onOpenChronicle: () {
-          Navigator.pop(ctx);
-          onOpenChronicle();
-        },
-        onExportStory: () {
-          Navigator.pop(ctx);
-          onExportStory();
-        },
-        onOpenTypography: () {
-          Navigator.pop(ctx);
-          onOpenTypography();
-        },
-        onOpenSettings: () {
-          Navigator.pop(ctx);
-          onOpenSettings();
-        },
-        onRerollLast: () {
-          Navigator.pop(ctx);
-          onRerollLast();
-        },
+      builder: (ctx) => Material(
+        type: MaterialType.transparency,
+        child: _ReaderDrawerContent(
+          book: book,
+          worldState: worldState,
+          chronicle: chronicle,
+          history: history,
+          lines: lines,
+          activeLineId: activeLineId,
+          busy: busy,
+          onJumpToChapter: (idx) {
+            Navigator.pop(ctx);
+            onJumpToChapter(idx);
+          },
+          onSelectLine: (l) {
+            Navigator.pop(ctx);
+            onSelectLine(l);
+          },
+          onRenameLine: (l) {
+            Navigator.pop(ctx);
+            onRenameLine(l);
+          },
+          onDeleteLine: (l) {
+            Navigator.pop(ctx);
+            onDeleteLine(l);
+          },
+          onPickBranch: () {
+            Navigator.pop(ctx);
+            onPickBranch();
+          },
+          onOpenCast: () {
+            Navigator.pop(ctx);
+            onOpenCast();
+          },
+          onOpenChronicle: () {
+            Navigator.pop(ctx);
+            onOpenChronicle();
+          },
+          onExportStory: () {
+            Navigator.pop(ctx);
+            onExportStory();
+          },
+          onOpenTypography: () {
+            Navigator.pop(ctx);
+            onOpenTypography();
+          },
+          onOpenSettings: () {
+            Navigator.pop(ctx);
+            onOpenSettings();
+          },
+          onRerollLast: () {
+            Navigator.pop(ctx);
+            onRerollLast();
+          },
+        ),
       ),
     );
   }
@@ -235,13 +239,12 @@ class _ReaderDrawerContentState extends State<_ReaderDrawerContent> {
     int idx,
     String label,
     ReadingPalette palette,
-    dynamic ladder,
+    SurfaceLadder ladder,
   ) {
     final active = _tab == idx;
     return Expanded(
-      child: InkWell(
-        borderRadius: BorderRadius.circular(8),
-        onTap: () {
+      child: FTappable(
+        onPress: () {
           HapticFeedback.selectionClick();
           setState(() => _tab = idx);
         },
@@ -254,6 +257,8 @@ class _ReaderDrawerContentState extends State<_ReaderDrawerContent> {
           ),
           child: Text(
             label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: TextStyle(
               fontSize: 12,
               fontWeight: active ? FontWeight.w600 : FontWeight.normal,
@@ -265,7 +270,7 @@ class _ReaderDrawerContentState extends State<_ReaderDrawerContent> {
     );
   }
 
-  Widget _buildStateTab(ReadingPalette palette, dynamic ladder) {
+  Widget _buildStateTab(ReadingPalette palette, SurfaceLadder ladder) {
     final s = widget.worldState;
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
@@ -423,9 +428,8 @@ class _ReaderDrawerContentState extends State<_ReaderDrawerContent> {
       separatorBuilder: (_, _) => const SizedBox(height: 6),
       itemBuilder: (_, i) {
         final node = widget.history[i];
-        return InkWell(
-          borderRadius: BorderRadius.circular(11),
-          onTap: () => widget.onJumpToChapter(i),
+        return FTappable(
+          onPress: () => widget.onJumpToChapter(i),
           child: FCard(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),

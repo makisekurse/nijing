@@ -52,6 +52,9 @@ class AppConfig {
   /// 已保存的多套模型配置档案，供设置页与阅读页一键切换。
   List<ModelProfile> savedProfiles;
 
+  /// 当前激活的模型档案 ID（空串表示手动服务商槽位配置，未绑定特定档案）。
+  String activeProfileId;
+
   /// 'mirage'（拟境，默认）| 'vintage' | 'dark' | 'parchment'
   String themeMode;
 
@@ -109,6 +112,7 @@ class AppConfig {
     this.auxWorkspaceId = '',
     this.auxModelName = '',
     List<ModelProfile>? savedProfiles,
+    this.activeProfileId = '',
     this.themeMode = 'mirage',
     this.fontSize = 'md',
     this.lineHeight = 1.9,
@@ -132,19 +136,25 @@ class AppConfig {
   /// 无论哪种情况，后台结构化任务都会强制关闭深度思考。
   AppConfig resolveAuxConfig() {
     if (!enableAuxModel || auxModelName.trim().isEmpty) {
-      return copyWith(enableThinking: false);
+      return copyWith(
+        workspaceId: apiProvider == 'bailian' ? workspaceId : '',
+        enableThinking: false,
+      );
     }
     final effProvider =
         auxApiProvider.trim().isEmpty ? apiProvider : auxApiProvider.trim();
     final sameProvider = effProvider == apiProvider;
+    final effWorkspaceId = effProvider == 'bailian'
+        ? (auxWorkspaceId.trim().isNotEmpty
+            ? auxWorkspaceId.trim()
+            : (sameProvider ? workspaceId : ''))
+        : '';
     return copyWith(
       apiProvider: effProvider,
       baseUrl: auxBaseUrl.trim().isNotEmpty
           ? auxBaseUrl.trim()
           : (sameProvider ? baseUrl : ''),
-      workspaceId: auxWorkspaceId.trim().isNotEmpty
-          ? auxWorkspaceId.trim()
-          : (sameProvider ? workspaceId : ''),
+      workspaceId: effWorkspaceId,
       modelName: auxModelName.trim(),
       reasoningDialect: 'auto',
       enableThinking: false,
@@ -162,6 +172,7 @@ class AppConfig {
         enableThinking: profile.enableThinking,
         thinkingBudget: profile.thinkingBudget,
         reasoningEffort: profile.reasoningEffort,
+        activeProfileId: profile.id,
       );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
@@ -180,6 +191,7 @@ class AppConfig {
         'auxWorkspaceId': auxWorkspaceId,
         'auxModelName': auxModelName,
         'savedProfiles': savedProfiles.map((p) => p.toJson()).toList(),
+        'activeProfileId': activeProfileId,
         'themeMode': themeMode,
         'fontSize': fontSize,
         'lineHeight': lineHeight,
@@ -218,6 +230,7 @@ class AppConfig {
                 )
                 .toList() ??
             <ModelProfile>[],
+        activeProfileId: (json['activeProfileId'] ?? '').toString(),
         themeMode: (json['themeMode'] ?? 'mirage').toString(),
         fontSize: (json['fontSize'] ?? 'md').toString(),
         lineHeight: (json['lineHeight'] as num?)?.toDouble() ?? 1.9,
@@ -251,6 +264,7 @@ class AppConfig {
     String? auxWorkspaceId,
     String? auxModelName,
     List<ModelProfile>? savedProfiles,
+    String? activeProfileId,
     String? themeMode,
     String? fontSize,
     double? lineHeight,
@@ -283,6 +297,7 @@ class AppConfig {
         auxWorkspaceId: auxWorkspaceId ?? this.auxWorkspaceId,
         auxModelName: auxModelName ?? this.auxModelName,
         savedProfiles: savedProfiles ?? List<ModelProfile>.from(this.savedProfiles),
+        activeProfileId: activeProfileId ?? this.activeProfileId,
         themeMode: themeMode ?? this.themeMode,
         fontSize: fontSize ?? this.fontSize,
         lineHeight: lineHeight ?? this.lineHeight,

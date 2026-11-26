@@ -1,4 +1,7 @@
-import 'package:dio/dio.dart';
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
 
 import '../core/app_error.dart';
 import '../models/app_config.dart';
@@ -162,7 +165,7 @@ class Providers {
     required AppConfig config,
     required String apiKey,
     String? workspaceId,
-    Dio? dio,
+    http.Client? httpClient,
   }) async {
     final urls = <String>[];
     final primaryUrl = modelsListUrl(config, workspaceId: workspaceId);
@@ -178,43 +181,52 @@ class Providers {
       throw const AppError(AppErrorKind.badRequest, '请先填写 Base URL。');
     }
 
-    final client = dio ??
-        Dio(
-          BaseOptions(
-            connectTimeout: const Duration(seconds: 15),
-            receiveTimeout: const Duration(seconds: 20),
-            validateStatus: (_) => true,
-          ),
-        );
+    final ownsClient = httpClient == null;
+    final client = httpClient ?? http.Client();
 
-    final headers = <String, dynamic>{
+    final headers = <String, String>{
       'Accept': 'application/json',
       if (apiKey.trim().isNotEmpty) 'Authorization': 'Bearer ${apiKey.trim()}',
     };
 
     AppError? lastErr;
-    for (final url in urls) {
-      try {
-        final resp = await client.get<dynamic>(
-          url,
-          options: Options(headers: headers),
-        );
-        final status = resp.statusCode ?? 0;
-        if (status != 200) {
-          lastErr = AppError.fromStatus(status, '${resp.data ?? ''}');
-          continue;
+    try {
+      for (final url in urls) {
+        try {
+          final resp = await client
+              .get(Uri.parse(url), headers: headers)
+              .timeout(const Duration(seconds: 20));
+          final bodyText = utf8.decode(resp.bodyBytes, allowMalformed: true);
+          if (resp.statusCode != 200) {
+            lastErr = AppError.fromStatus(resp.statusCode, bodyText);
+            continue;
+          }
+          dynamic decoded;
+          try {
+            decoded = jsonDecode(bodyText);
+          } catch (_) {
+            lastErr = const AppError(AppErrorKind.parse, '远端模型列表返回了非 JSON 内容。');
+            continue;
+          }
+          final parsed = parseRemoteModelsPayload(decoded);
+          if (parsed.isNotEmpty) return parsed;
+          lastErr = const AppError(AppErrorKind.parse, '远端返回成功，但模型列表为空。');
+        } on TimeoutException {
+          lastErr = const AppError(
+            AppErrorKind.network,
+            '拉取模型列表超时，请检查网络或代理。',
+          );
+        } catch (e) {
+          lastErr = AppError(
+            AppErrorKind.network,
+            '拉取模型列表失败：$e',
+            detail: e.toString(),
+          );
         }
-        final parsed = parseRemoteModelsPayload(resp.data);
-        if (parsed.isNotEmpty) return parsed;
-        lastErr = const AppError(AppErrorKind.parse, '远端返回成功，但模型列表为空。');
-      } on DioException catch (e) {
-        lastErr = AppError(
-          AppErrorKind.network,
-          '拉取模型列表失败：${e.message ?? '网络不可达'}',
-          detail: e.toString(),
-        );
-      } catch (e) {
-        lastErr = AppError(AppErrorKind.unknown, '拉取模型列表异常：$e');
+      }
+    } finally {
+      if (ownsClient) {
+        client.close();
       }
     }
 

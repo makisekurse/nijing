@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../models/app_config.dart';
 import '../../services/text_layout.dart';
 import '../themes/app_theme.dart';
+import '../themes/surface_ladder.dart';
 
 /// 阅读页内实时排版调节面板（借鉴 Anx Reader / 微信读书）。
 ///
@@ -17,15 +18,18 @@ class ReaderTypographySheet {
   static Future<void> show(
     BuildContext context, {
     required AppConfig Function() readConfig,
-    required ValueChanged<AppConfig> onApply,
+    required void Function(AppConfig next, {bool immediate}) onApply,
   }) {
     return showFSheet<void>(
       context: context,
       side: FLayout.btt,
       mainAxisMaxRatio: 0.72,
-      builder: (ctx) => _TypographyBody(
-        readConfig: readConfig,
-        onApply: onApply,
+      builder: (ctx) => Material(
+        type: MaterialType.transparency,
+        child: _TypographyBody(
+          readConfig: readConfig,
+          onApply: onApply,
+        ),
       ),
     );
   }
@@ -33,7 +37,7 @@ class ReaderTypographySheet {
 
 class _TypographyBody extends StatefulWidget {
   final AppConfig Function() readConfig;
-  final ValueChanged<AppConfig> onApply;
+  final void Function(AppConfig next, {bool immediate}) onApply;
 
   const _TypographyBody({
     required this.readConfig,
@@ -53,9 +57,9 @@ class _TypographyBodyState extends State<_TypographyBody> {
     _cfg = widget.readConfig();
   }
 
-  void _update(AppConfig next) {
+  void _update(AppConfig next, {bool immediate = true}) {
     setState(() => _cfg = next);
-    widget.onApply(next);
+    widget.onApply(next, immediate: immediate);
   }
 
   @override
@@ -180,7 +184,8 @@ class _TypographyBodyState extends State<_TypographyBody> {
                 max: 2.6,
                 divisions: 12,
                 activeColor: palette.accent,
-                onChanged: (v) => _update(_cfg.copyWith(lineHeight: v)),
+                onChanged: (v) =>
+                    _update(_cfg.copyWith(lineHeight: v), immediate: false),
               ),
 
               // 首行缩进 + 段间距
@@ -270,13 +275,12 @@ class _TypographyBodyState extends State<_TypographyBody> {
   Widget _themePill(
     ThemePreset preset,
     ReadingPalette palette,
-    dynamic ladder,
+    SurfaceLadder ladder,
   ) {
     final selected = _cfg.themeMode == preset.id;
     final swatch = AppTheme.paletteOfId(preset.id);
-    return InkWell(
-      borderRadius: BorderRadius.circular(12),
-      onTap: () {
+    return FTappable(
+      onPress: () {
         HapticFeedback.selectionClick();
         _update(_cfg.copyWith(themeMode: preset.id));
       },
@@ -319,12 +323,11 @@ class _TypographyBodyState extends State<_TypographyBody> {
     required String label,
     required bool selected,
     required ReadingPalette palette,
-    required dynamic ladder,
+    required SurfaceLadder ladder,
     required VoidCallback onTap,
   }) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(9),
-      onTap: () {
+    return FTappable(
+      onPress: () {
         HapticFeedback.selectionClick();
         onTap();
       },

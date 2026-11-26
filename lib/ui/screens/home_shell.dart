@@ -15,6 +15,7 @@ import '../../services/save_service.dart';
 import '../../state/config_provider.dart';
 import '../../state/library_provider.dart';
 import '../themes/app_theme.dart';
+import '../widgets/app_toast.dart';
 import 'about_screen.dart';
 import 'continue_tab.dart';
 import 'profile_tab.dart';
@@ -530,49 +531,52 @@ class _HomeShellState extends State<HomeShell> {
       context: context,
       side: FLayout.btt,
       mainAxisMaxRatio: 0.85,
-      builder: (ctx) => Container(
-        decoration: BoxDecoration(
-          color: palette.page,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          border: Border(top: BorderSide(color: palette.rule, width: 0.8)),
-        ),
-        child: SafeArea(
-          top: false,
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(18, 12, 18, 22),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Center(
-                  child: Container(
-                    width: 36,
-                    height: 4,
-                    margin: const EdgeInsets.only(bottom: 14),
-                    decoration: BoxDecoration(
-                      color: palette.muted.withValues(alpha: 0.35),
-                      borderRadius: BorderRadius.circular(2),
+      builder: (ctx) => Material(
+        type: MaterialType.transparency,
+        child: Container(
+          decoration: BoxDecoration(
+            color: palette.page,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            border: Border(top: BorderSide(color: palette.rule, width: 0.8)),
+          ),
+          child: SafeArea(
+            top: false,
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(18, 12, 18, 22),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 14),
+                      decoration: BoxDecoration(
+                        color: palette.muted.withValues(alpha: 0.35),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
                   ),
-                ),
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: palette.ink,
-                  ),
-                ),
-                if (subtitle != null && subtitle.isNotEmpty) ...<Widget>[
-                  const SizedBox(height: 4),
                   Text(
-                    subtitle,
-                    style: TextStyle(fontSize: 12.5, color: palette.muted),
+                    title,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: palette.ink,
+                    ),
                   ),
+                  if (subtitle != null && subtitle.isNotEmpty) ...<Widget>[
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      style: TextStyle(fontSize: 12.5, color: palette.muted),
+                    ),
+                  ],
+                  const SizedBox(height: 14),
+                  child,
                 ],
-                const SizedBox(height: 14),
-                child,
-              ],
+              ),
             ),
           ),
         ),
@@ -703,28 +707,23 @@ class _HomeShellState extends State<HomeShell> {
     );
     await Clipboard.setData(ClipboardData(text: content));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        duration: const Duration(seconds: 6),
-        content: Text(
-          res.success
-              ? '$okLabel：${res.path}\n（已同时复制到剪贴板）'
-              : '保存失败：${res.message}（已复制到剪贴板）',
-        ),
-        action: SnackBarAction(
-          label: '系统分享',
-          onPressed: () => FileExportService.shareText(
-            title: shareTitle,
-            text: content,
-          ),
-        ),
+    AppToast.show(
+      context,
+      res.success
+          ? '$okLabel：${res.path}（已同时复制到剪贴板）'
+          : '保存失败：${res.message}（已复制到剪贴板）',
+      duration: const Duration(seconds: 6),
+      actionLabel: '系统分享',
+      onAction: () => FileExportService.shareText(
+        title: shareTitle,
+        text: content,
       ),
     );
   }
 
   void _toast(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    AppToast.show(context, msg);
   }
 
   @override

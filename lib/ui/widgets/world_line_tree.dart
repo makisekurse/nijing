@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:forui/forui.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../models/world_line.dart';
 import '../themes/app_theme.dart';
@@ -98,9 +100,8 @@ class WorldLineTreeView extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          InkWell(
-            borderRadius: BorderRadius.circular(10),
-            onTap: isActive ? null : () => onSelect(l),
+          FTappable(
+            onPress: isActive ? null : () => onSelect(l),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               decoration: BoxDecoration(
@@ -117,10 +118,8 @@ class WorldLineTreeView extends StatelessWidget {
                 children: <Widget>[
                   // 树形节点图标：子分支使用清晰的转角分支箭头
                   Icon(
-                    isRoot
-                        ? (isActive ? Icons.hub_rounded : Icons.hub_outlined)
-                        : Icons.subdirectory_arrow_right_rounded,
-                    size: 20,
+                    isRoot ? LucideIcons.gitBranch : LucideIcons.cornerDownRight,
+                    size: 18,
                     color: isActive
                         ? palette.accent
                         : theme.colorScheme.onSurface.withValues(alpha: 0.5),
@@ -202,42 +201,16 @@ class WorldLineTreeView extends StatelessWidget {
                     ),
                   ),
 
-                  // 更多操作
-                  PopupMenuButton<String>(
-                    icon: Icon(
-                      Icons.more_vert_rounded,
-                      size: 18,
+                  // 更多操作（forui 原生触控按钮 + 底部弹层，彻底脱离 Material PopupMenuButton）
+                  FButton.icon(
+                    variant: FButtonVariant.ghost,
+                    size: FButtonSizeVariant.xs,
+                    onPress: () => _showLineActions(context, palette, l, isActive),
+                    child: Icon(
+                      LucideIcons.ellipsisVertical,
+                      size: 16,
                       color: palette.muted,
                     ),
-                    onSelected: (v) {
-                      switch (v) {
-                        case 'switch':
-                          onSelect(l);
-                          break;
-                        case 'rename':
-                          onRename(l);
-                          break;
-                        case 'delete':
-                          onDelete(l);
-                          break;
-                      }
-                    },
-                    itemBuilder: (_) => <PopupMenuEntry<String>>[
-                      if (!isActive)
-                        const PopupMenuItem<String>(
-                          value: 'switch',
-                          child: Text('切换到此世界线'),
-                        ),
-                      const PopupMenuItem<String>(
-                        value: 'rename',
-                        child: Text('重命名'),
-                      ),
-                      if (lines.length > 1)
-                        const PopupMenuItem<String>(
-                          value: 'delete',
-                          child: Text('删除此世界线'),
-                        ),
-                    ],
                   ),
                 ],
               ),
@@ -255,6 +228,92 @@ class WorldLineTreeView extends StatelessWidget {
               isLastChild: j == node.children.length - 1,
             ),
         ],
+      ),
+    );
+  }
+
+  void _showLineActions(
+    BuildContext context,
+    ReadingPalette palette,
+    WorldLine line,
+    bool isActive,
+  ) {
+    showFSheet<void>(
+      context: context,
+      side: FLayout.btt,
+      mainAxisMaxRatio: 0.55,
+      builder: (ctx) => Material(
+        type: MaterialType.transparency,
+        child: Container(
+          decoration: BoxDecoration(
+            color: palette.page,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            border: Border(top: BorderSide(color: palette.rule, width: 0.8)),
+          ),
+          child: SafeArea(
+            top: false,
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(18, 12, 18, 22),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 14),
+                      decoration: BoxDecoration(
+                        color: palette.muted.withValues(alpha: 0.35),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  Text(
+                    line.name,
+                    style: TextStyle(
+                      fontSize: 15.5,
+                      fontWeight: FontWeight.w700,
+                      color: palette.ink,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  FTileGroup(
+                    children: <FTileMixin>[
+                      if (!isActive)
+                        FTile(
+                          prefix: const Icon(LucideIcons.arrowRightLeft, size: 16),
+                          title: const Text('切换到此世界线'),
+                          onPress: () {
+                            Navigator.pop(ctx);
+                            onSelect(line);
+                          },
+                        ),
+                      FTile(
+                        prefix: const Icon(LucideIcons.pencil, size: 16),
+                        title: const Text('重命名'),
+                        onPress: () {
+                          Navigator.pop(ctx);
+                          onRename(line);
+                        },
+                      ),
+                      if (lines.length > 1)
+                        FTile(
+                          variant: FItemVariant.destructive,
+                          prefix: const Icon(LucideIcons.trash2, size: 16),
+                          title: const Text('删除此世界线'),
+                          onPress: () {
+                            Navigator.pop(ctx);
+                            onDelete(line);
+                          },
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

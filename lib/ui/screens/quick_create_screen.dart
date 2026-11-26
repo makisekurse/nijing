@@ -5,7 +5,6 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
 
 import '../../data/secure_store.dart';
-import '../../data/world_book_repository.dart';
 import '../../models/app_config.dart';
 import '../../models/world_book.dart';
 import '../../services/world_builder_service.dart';
@@ -90,8 +89,6 @@ class _QuickCreateScreenState extends State<QuickCreateScreen> {
     );
     if (!mounted) return;
     if (saved != null) {
-      await WorldBookRepository.upsert(saved);
-      if (!mounted) return;
       Navigator.of(context).pop(saved);
     }
   }
@@ -105,8 +102,6 @@ class _QuickCreateScreenState extends State<QuickCreateScreen> {
     );
     if (!mounted) return;
     if (saved != null) {
-      await WorldBookRepository.upsert(saved);
-      if (!mounted) return;
       Navigator.of(context).pop(saved);
     }
   }
@@ -155,9 +150,8 @@ class _QuickCreateScreenState extends State<QuickCreateScreen> {
             runSpacing: 8,
             children: _examples
                 .map(
-                  (e) => InkWell(
-                    borderRadius: BorderRadius.circular(10),
-                    onTap: _busy
+                  (e) => FTappable(
+                    onPress: _busy
                         ? null
                         : () {
                             HapticFeedback.selectionClick();

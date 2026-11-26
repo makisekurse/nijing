@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:forui/forui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:provider/provider.dart';
 
 import '../../data/world_book_repository.dart';
 import '../../models/world_book.dart';
 import '../../services/file_export_service.dart';
+import '../../state/library_provider.dart';
 import '../themes/app_theme.dart';
+import '../widgets/app_toast.dart';
 
 /// 世界书编辑器（`forui` 骨架：首屏聚焦核心 3 项，进阶 9 项收纳进 `FAccordion`）。
 class WorldBookEditorScreen extends StatefulWidget {
@@ -102,7 +105,15 @@ class _WorldBookEditorScreenState extends State<WorldBookEditorScreen> {
   Future<void> _save() async {
     HapticFeedback.lightImpact();
     final book = _collect();
-    await WorldBookRepository.upsert(book);
+    LibraryProvider? lib;
+    try {
+      lib = Provider.of<LibraryProvider>(context, listen: false);
+    } catch (_) {}
+    if (lib != null) {
+      await lib.upsertBook(book);
+    } else {
+      await WorldBookRepository.upsert(book);
+    }
     if (!mounted) return;
     Navigator.of(context).pop(book);
   }
@@ -121,21 +132,16 @@ class _WorldBookEditorScreenState extends State<WorldBookEditorScreen> {
     );
     await Clipboard.setData(ClipboardData(text: json));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        duration: const Duration(seconds: 6),
-        content: Text(
-          res.success
-              ? '世界书已保存至：${res.path}\n（已同时复制到剪贴板）'
-              : '保存失败：${res.message}（已复制到剪贴板）',
-        ),
-        action: SnackBarAction(
-          label: '系统分享',
-          onPressed: () => FileExportService.shareText(
-            title: '世界书 · ${book.name}',
-            text: json,
-          ),
-        ),
+    AppToast.show(
+      context,
+      res.success
+          ? '世界书已保存至：${res.path}（已同时复制到剪贴板）'
+          : '保存失败：${res.message}（已复制到剪贴板）',
+      duration: const Duration(seconds: 6),
+      actionLabel: '系统分享',
+      onAction: () => FileExportService.shareText(
+        title: '世界书 · ${book.name}',
+        text: json,
       ),
     );
   }

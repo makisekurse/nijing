@@ -18,14 +18,36 @@ class ConfigProvider extends ChangeNotifier {
   static const String kLegacyWorkspaceKey = 'nijing_workspace_id';
 
   AppConfig _config;
-  String _activeProfileId = '';
 
-  ConfigProvider(AppConfig initialConfig) : _config = initialConfig {
+  ConfigProvider(AppConfig initialConfig)
+      : _config = _normalizeActiveProfile(initialConfig) {
     _syncLogFlags(_config);
   }
 
   AppConfig get config => _config;
-  String get activeProfileId => _activeProfileId;
+  String get activeProfileId => _config.activeProfileId;
+
+  /// 若当前 `activeProfileId` 对应的档案不存在，或核心路由参数已手动偏离该档案，
+  /// 自动清空 `activeProfileId`，彻底杜绝手动切换服务商/端点后仍串用旧档案 Key。
+  static AppConfig _normalizeActiveProfile(AppConfig cfg) {
+    final pid = cfg.activeProfileId.trim();
+    if (pid.isEmpty) return cfg;
+    ModelProfile? matched;
+    for (final p in cfg.savedProfiles) {
+      if (p.id == pid) {
+        matched = p;
+        break;
+      }
+    }
+    if (matched == null ||
+        matched.apiProvider != cfg.apiProvider ||
+        matched.baseUrl != cfg.baseUrl ||
+        matched.modelName != cfg.modelName ||
+        matched.workspaceId != cfg.workspaceId) {
+      return cfg.copyWith(activeProfileId: '');
+    }
+    return cfg;
+  }
 
   /// 启动时加载配置并完成历史字段的一次性迁移。
   static Future<AppConfig> loadInitialConfig() async {
@@ -68,15 +90,20 @@ class ConfigProvider extends ChangeNotifier {
 
   /// 更新配置并同步持久化（离散开关立即落盘，滑杆/输入框走防抖）。
   void updateConfig(AppConfig next, {bool immediate = false}) {
-    _config = next;
-    _syncLogFlags(next);
-    final raw = next.encode();
+    final normalized = _normalizeActiveProfile(next);
+    _config = normalized;
+    _syncLogFlags(normalized);
+    final raw = normalized.encode();
     if (immediate) {
       PrefsStore.setString(kConfigKey, raw);
+      PrefsStore.setString(kLegacyWorkspaceKey, normalized.workspaceId.trim());
     } else {
       PrefsStore.setStringDebounced(kConfigKey, raw);
+      PrefsStore.setStringDebounced(
+        kLegacyWorkspaceKey,
+        normalized.workspaceId.trim(),
+      );
     }
-    PrefsStore.setStringDebounced(kLegacyWorkspaceKey, next.workspaceId.trim());
     notifyListeners();
   }
 
@@ -86,14 +113,24 @@ class ConfigProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 读取当前主配置对应的有效 API Key（若已选中带独立 Key 的档案则优先取档案 Key）。
+  /// 读取当前主配置对应的有效 API Key（若已选中同厂商有效档案则优先取档案 Key）。
   Future<String> resolveActiveMainKey() async {
-    if (_activeProfileId.isNotEmpty) {
-      final key = await SecureStore.readKeyForProfile(
-        _activeProfileId,
-        fallbackProviderId: _config.apiProvider,
-      );
-      if (key.isNotEmpty) return key;
+    final pid = _config.activeProfileId.trim();
+    if (pid.isNotEmpty) {
+      ModelProfile? matched;
+      for (final p in _config.savedProfiles) {
+        if (p.id == pid) {
+          matched = p;
+          break;
+        }
+      }
+      if (matched != null && matched.apiProvider == _config.apiProvider) {
+        final key = await SecureStore.readKeyForProfile(
+          pid,
+          fallbackProviderId: _config.apiProvider,
+        );
+        if (key.isNotEmpty) return key;
+      }
     }
     return SecureStore.readMainKeyForConfig(_config);
   }
@@ -123,22 +160,22 @@ class ConfigProvider extends ChangeNotifier {
       await SecureStore.writeKeyForProfile(profile.id, apiKey);
     }
     final nextProfiles = <ModelProfile>[..._config.savedProfiles, profile];
-    _activeProfileId = profile.id;
-    updateConfig(_config.copyWith(savedProfiles: nextProfiles), immediate: true);
+    updateConfig(
+      _config.copyWith(
+        savedProfiles: nextProfiles,
+        activeProfileId: profile.id,
+      ),
+      immediate: true,
+    );
     return profile;
   }
 
-  /// 一键切换至已保存的 [ModelProfile]，同步切换其独立加密 Key 槽位。
+  /// 一键切换至已保存的 [ModelProfile]，保持档案 Key 与服务商全局槽位严格分离。
   Future<String> applyProfile(ModelProfile profile) async {
-    _activeProfileId = profile.id;
     final key = await SecureStore.readKeyForProfile(
       profile.id,
       fallbackProviderId: profile.apiProvider,
     );
-    // 同步回填到对应服务商槽位，确保后续切换及直读不丢 Key
-    if (key.isNotEmpty) {
-      await SecureStore.writeKeyForProvider(profile.apiProvider, key);
-    }
     updateConfig(_config.applyProfile(profile), immediate: true);
     return key;
   }
@@ -146,10 +183,16 @@ class ConfigProvider extends ChangeNotifier {
   /// 删除一个模型档案及其关联的独立加密 Key。
   Future<void> deleteProfile(String profileId) async {
     await SecureStore.deleteProfileKey(profileId);
-    if (_activeProfileId == profileId) _activeProfileId = '';
     final next = _config.savedProfiles
         .where((p) => p.id != profileId)
         .toList();
-    updateConfig(_config.copyWith(savedProfiles: next), immediate: true);
+    updateConfig(
+      _config.copyWith(
+        savedProfiles: next,
+        activeProfileId:
+            _config.activeProfileId == profileId ? '' : _config.activeProfileId,
+      ),
+      immediate: true,
+    );
   }
 }

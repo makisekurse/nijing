@@ -61,23 +61,20 @@ jobs:
         run: flutter pub get
 
       - name: Analyze
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+        run: flutter analyze --no-fatal-infos
 
       - name: Run unit tests
         run: flutter test
 
-      # 版本号：**推标签时以标签为准**。
-      #
-      # 2026-09-25 修：以前一律用 `1.0.${{ github.run_number }}`，结果
-      # Release 标签写 v1.1.0、包内 versionName 却是 1.0.8，两个口径对不上。
-      # 现在推 v* 标签就用标签里的版本号；推 main 仍用运行序号（只增不减）。
+      # 版本号：**推标签时以标签为准**；推 main 时从 pubspec.yaml 提取主版本号拼接 dev 序号。
       - name: Resolve version
         id: ver
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             V="${GITHUB_REF_NAME#v}"
           else
-            V="1.0.${GITHUB_RUN_NUMBER}"
+            BASE_VER=$(grep '^version:' pubspec.yaml | head -1 | sed -E 's/^version:[[:space:]]*([^+[:space:]]+).*/\1/')
+            V="${BASE_VER}-dev.${GITHUB_RUN_NUMBER}"
           fi
           echo "name=${V}" >> "$GITHUB_OUTPUT"
           echo "versionName = ${V}"

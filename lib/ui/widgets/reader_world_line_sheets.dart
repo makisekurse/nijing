@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:forui/forui.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../models/chapter_node.dart';
 import '../../models/world_book.dart';
@@ -9,9 +11,9 @@ import '../../services/file_export_service.dart';
 import '../../services/runtime_log.dart';
 import '../../services/story_export_service.dart';
 import '../themes/app_theme.dart';
-import 'world_line_tree.dart';
+import 'app_toast.dart';
 
-/// 阅读页的故事导出、日志导出与世界线分岔管理弹层。
+/// 阅读页的故事导出、日志导出与世界线分岔选择弹层（统一 `forui` 视觉与 `LucideIcons`）。
 class ReaderExportAndLineSheets {
   ReaderExportAndLineSheets._();
 
@@ -20,9 +22,11 @@ class ReaderExportAndLineSheets {
     ChapterNode chapter,
   ) async {
     final sb = StringBuffer();
-    sb.writeln(chapter.date.trim().isEmpty
-        ? chapter.title
-        : '${chapter.title} · ${chapter.date.trim()}');
+    sb.writeln(
+      chapter.date.trim().isEmpty
+          ? chapter.title
+          : '${chapter.title} · ${chapter.date.trim()}',
+    );
     final act = chapter.playerAction;
     if (act != null && act.trim().isNotEmpty) {
       sb.writeln();
@@ -34,9 +38,7 @@ class ReaderExportAndLineSheets {
     }
     await Clipboard.setData(ClipboardData(text: sb.toString().trim()));
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('本幕已复制到剪贴板')),
-    );
+    AppToast.show(context, '本幕已复制到剪贴板');
   }
 
   static void showExportSheet(
@@ -47,124 +49,145 @@ class ReaderExportAndLineSheets {
     required String chronicle,
     required WorldState worldState,
   }) {
-    final theme = Theme.of(context);
     final palette = AppTheme.readingOf(context);
+    final ladder = AppTheme.ladderOf(context);
 
-    showModalBottomSheet<void>(
+    showFSheet<void>(
       context: context,
-      backgroundColor: theme.scaffoldBackgroundColor,
-      showDragHandle: true,
-      isScrollControlled: true,
-      useSafeArea: true,
-      builder: (ctx) => SafeArea(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(ctx).size.height * 0.85,
+      side: FLayout.btt,
+      mainAxisMaxRatio: 0.85,
+      builder: (ctx) => Material(
+        type: MaterialType.transparency,
+        child: Container(
+          decoration: BoxDecoration(
+            color: palette.page,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            border: Border(top: BorderSide(color: ladder.hairlineStrong, width: 0.8)),
           ),
-          child: SingleChildScrollView(
-            physics: const ClampingScrollPhysics(),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+          child: SafeArea(
+            top: false,
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(18, 12, 18, 22),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 14),
+                      decoration: BoxDecoration(
+                        color: palette.muted.withValues(alpha: 0.35),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
                   Text(
                     '导出推演故事',
                     style: TextStyle(
                       fontSize: 16,
-                      fontWeight: FontWeight.w600,
+                      fontWeight: FontWeight.w700,
                       color: palette.ink,
                     ),
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 5),
                   Text(
                     '将当前世界线的长篇小说按章节规范排版导出。支持保存为物理文件至系统下载目录，以及系统原生分享与复制。',
                     style: TextStyle(
-                        fontSize: 12, height: 1.5, color: palette.muted),
+                      fontSize: 12,
+                      height: 1.5,
+                      color: palette.muted,
+                    ),
                   ),
-                  const SizedBox(height: 12),
-                  ListTile(
-                    leading: const Icon(Icons.file_present_rounded),
-                    title: const Text('导出为 Markdown 文件（.md）'),
-                    subtitle: const Text('保存至系统下载目录，带标题层级、抉择与大事记'),
-                    onTap: () async {
-                      Navigator.pop(ctx);
-                      await exportStoryFile(
-                        context,
-                        book: book,
-                        line: line,
-                        history: history,
-                        chronicle: chronicle,
-                        worldState: worldState,
-                        isMarkdown: true,
-                      );
-                    },
+                  const SizedBox(height: 14),
+                  FTileGroup(
+                    children: <FTileMixin>[
+                      FTile(
+                        prefix: const Icon(LucideIcons.fileText, size: 17),
+                        title: const Text('导出为 Markdown 文件（.md）'),
+                        subtitle: const Text('保存至系统下载目录，带标题层级、抉择与大事记'),
+                        onPress: () async {
+                          Navigator.pop(ctx);
+                          await exportStoryFile(
+                            context,
+                            book: book,
+                            line: line,
+                            history: history,
+                            chronicle: chronicle,
+                            worldState: worldState,
+                            isMarkdown: true,
+                          );
+                        },
+                      ),
+                      FTile(
+                        prefix: const Icon(LucideIcons.fileDown, size: 17),
+                        title: const Text('导出为纯文本文件（.txt）'),
+                        subtitle: const Text('保存至系统下载目录，带全角缩进与分段的小说纯文本'),
+                        onPress: () async {
+                          Navigator.pop(ctx);
+                          await exportStoryFile(
+                            context,
+                            book: book,
+                            line: line,
+                            history: history,
+                            chronicle: chronicle,
+                            worldState: worldState,
+                            isMarkdown: false,
+                          );
+                        },
+                      ),
+                    ],
                   ),
-                  ListTile(
-                    leading: const Icon(Icons.description_outlined),
-                    title: const Text('导出为纯文本文件（.txt）'),
-                    subtitle: const Text('保存至系统下载目录，带全角缩进与分段的小说纯文本'),
-                    onTap: () async {
-                      Navigator.pop(ctx);
-                      await exportStoryFile(
-                        context,
-                        book: book,
-                        line: line,
-                        history: history,
-                        chronicle: chronicle,
-                        worldState: worldState,
-                        isMarkdown: false,
-                      );
-                    },
+                  const SizedBox(height: 10),
+                  FTileGroup(
+                    children: <FTileMixin>[
+                      FTile(
+                        prefix: const Icon(LucideIcons.copy, size: 17),
+                        title: const Text('复制为 Markdown 格式'),
+                        subtitle: const Text('仅复制结构化 Markdown 文本到剪贴板'),
+                        onPress: () async {
+                          Navigator.pop(ctx);
+                          final md = StoryExportService.toMarkdown(
+                            book: book,
+                            line: line,
+                            history: history,
+                            chronicle: chronicle,
+                            worldState: worldState,
+                          );
+                          await Clipboard.setData(ClipboardData(text: md));
+                          if (context.mounted) {
+                            AppToast.show(
+                              context,
+                              'Markdown 故事已复制到剪贴板（${md.length} 字）',
+                            );
+                          }
+                        },
+                      ),
+                      FTile(
+                        prefix: const Icon(LucideIcons.clipboardCopy, size: 17),
+                        title: const Text('复制为纯文本小说'),
+                        subtitle: const Text('仅复制纯文本小说内容到剪贴板'),
+                        onPress: () async {
+                          Navigator.pop(ctx);
+                          final txt = StoryExportService.toPlainText(
+                            book: book,
+                            line: line,
+                            history: history,
+                            chronicle: chronicle,
+                            worldState: worldState,
+                          );
+                          await Clipboard.setData(ClipboardData(text: txt));
+                          if (context.mounted) {
+                            AppToast.show(
+                              context,
+                              '纯文本小说已复制到剪贴板（${txt.length} 字）',
+                            );
+                          }
+                        },
+                      ),
+                    ],
                   ),
-                  const Divider(height: 1),
-                  ListTile(
-                    leading: const Icon(Icons.copy_rounded),
-                    title: const Text('复制为 Markdown 格式'),
-                    subtitle: const Text('仅复制结构化 Markdown 文本到剪贴板'),
-                    onTap: () async {
-                      Navigator.pop(ctx);
-                      final md = StoryExportService.toMarkdown(
-                        book: book,
-                        line: line,
-                        history: history,
-                        chronicle: chronicle,
-                        worldState: worldState,
-                      );
-                      await Clipboard.setData(ClipboardData(text: md));
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                              content:
-                                  Text('Markdown 故事已复制到剪贴板（${md.length} 字）')),
-                        );
-                      }
-                    },
-                  ),
-                  ListTile(
-                    leading: const Icon(Icons.content_copy_rounded),
-                    title: const Text('复制为纯文本小说'),
-                    subtitle: const Text('仅复制纯文本小说内容到剪贴板'),
-                    onTap: () async {
-                      Navigator.pop(ctx);
-                      final txt = StoryExportService.toPlainText(
-                        book: book,
-                        line: line,
-                        history: history,
-                        chronicle: chronicle,
-                        worldState: worldState,
-                      );
-                      await Clipboard.setData(ClipboardData(text: txt));
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                              content: Text('纯文本小说已复制到剪贴板（${txt.length} 字）')),
-                        );
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 8),
                 ],
               ),
             ),
@@ -215,23 +238,18 @@ class ReaderExportAndLineSheets {
     await Clipboard.setData(ClipboardData(text: content));
     if (!context.mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        duration: const Duration(seconds: 6),
-        content: Text(
-          res.success
-              ? '已导出保存至：${res.path}\n（已同时复制到剪贴板）'
-              : '保存失败：${res.message}（已复制到剪贴板）',
-        ),
-        action: SnackBarAction(
-          label: '系统分享',
-          onPressed: () => _shareOrFallback(
-            path: res.success ? res.path : null,
-            title: '${book.name} · 推演故事',
-            text: content,
-            mimeType: mimeType,
-          ),
-        ),
+    AppToast.show(
+      context,
+      res.success
+          ? '已导出保存至：${res.path}（已同时复制到剪贴板）'
+          : '保存失败：${res.message}（已复制到剪贴板）',
+      duration: const Duration(seconds: 6),
+      actionLabel: '系统分享',
+      onAction: () => _shareOrFallback(
+        path: res.success ? res.path : null,
+        title: '${book.name} · 推演故事',
+        text: content,
+        mimeType: mimeType,
       ),
     );
   }
@@ -257,23 +275,18 @@ class ReaderExportAndLineSheets {
       );
     }
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        duration: const Duration(seconds: 6),
-        content: Text(
-          res.success
-              ? '运行日志（${RuntimeLog.count} 条）已保存至：${res.path}'
-              : '导出失败：${res.message}',
-        ),
-        action: SnackBarAction(
-          label: '系统分享',
-          onPressed: () => _shareOrFallback(
-            path: res.success ? res.path : null,
-            title: '拟境 · 运行日志',
-            text: text,
-            mimeType: 'text/plain',
-          ),
-        ),
+    AppToast.show(
+      context,
+      res.success
+          ? '运行日志（${RuntimeLog.count} 条）已保存至：${res.path}'
+          : '导出失败：${res.message}',
+      duration: const Duration(seconds: 6),
+      actionLabel: '系统分享',
+      onAction: () => _shareOrFallback(
+        path: res.success ? res.path : null,
+        title: '拟境 · 运行日志',
+        text: text,
+        mimeType: 'text/plain',
       ),
     );
   }
@@ -295,158 +308,123 @@ class ReaderExportAndLineSheets {
     await FileExportService.shareText(title: title, text: text);
   }
 
-  static void showWorldLines(
-    BuildContext context, {
-    required List<WorldLine> lines,
-    required String activeLineId,
-    required bool canBranch,
-    required ValueChanged<WorldLine> onSelect,
-    required ValueChanged<WorldLine> onRename,
-    required ValueChanged<WorldLine> onDelete,
-    required VoidCallback onPickBranch,
-  }) {
-    final theme = Theme.of(context);
-    final muted = theme.colorScheme.onSurface.withValues(alpha: 0.55);
-
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: theme.scaffoldBackgroundColor,
-      showDragHandle: true,
-      isScrollControlled: true,
-      useSafeArea: true,
-      builder: (ctx) => SafeArea(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(ctx).size.height * 0.85,
-          ),
-          child: SingleChildScrollView(
-            physics: const ClampingScrollPhysics(),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(20, 0, 20, 4),
-                  child: Text(
-                    '世界线时空分岔树',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-                  child: Text(
-                    '清晰展示从第几幕分岔、走向与幕数。轻触任一条即可直接切换过去。',
-                    style: TextStyle(fontSize: 11.5, height: 1.6, color: muted),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: WorldLineTreeView(
-                    lines: lines,
-                    activeLineId: activeLineId,
-                    onSelect: (l) {
-                      Navigator.pop(ctx);
-                      onSelect(l);
-                    },
-                    onRename: (l) {
-                      Navigator.pop(ctx);
-                      onRename(l);
-                    },
-                    onDelete: (l) {
-                      Navigator.pop(ctx);
-                      onDelete(l);
-                    },
-                  ),
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.call_split_rounded),
-                  title: const Text('从某一幕分岔出新世界线'),
-                  subtitle: const Text('保留到那一幕，之后重新做选择'),
-                  enabled: canBranch,
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    onPickBranch();
-                  },
-                ),
-                const SizedBox(height: 12),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   static void showBranchPicker(
     BuildContext context, {
     required List<ChapterNode> history,
     required ValueChanged<int> onPickIndex,
   }) {
-    final theme = Theme.of(context);
-    final muted = theme.colorScheme.onSurface.withValues(alpha: 0.55);
+    final palette = AppTheme.readingOf(context);
+    final ladder = AppTheme.ladderOf(context);
 
-    showModalBottomSheet<void>(
+    showFSheet<void>(
       context: context,
-      backgroundColor: theme.scaffoldBackgroundColor,
-      showDragHandle: true,
-      isScrollControlled: true,
-      useSafeArea: true,
-      builder: (ctx) => SafeArea(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(ctx).size.height * 0.82,
+      side: FLayout.btt,
+      mainAxisMaxRatio: 0.82,
+      builder: (ctx) => Material(
+        type: MaterialType.transparency,
+        child: Container(
+          decoration: BoxDecoration(
+            color: palette.page,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            border: Border(top: BorderSide(color: ladder.hairlineStrong, width: 0.8)),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              const Padding(
-                padding: EdgeInsets.fromLTRB(20, 0, 20, 4),
-                child: Text(
-                  '从哪一幕分岔？',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-                child: Text(
-                  '保留到该幕为止的剧情，之后重新做选择。当前世界线会原样保留，不会丢。',
-                  style: TextStyle(fontSize: 11.5, height: 1.6, color: muted),
-                ),
-              ),
-              Flexible(
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  physics: const ClampingScrollPhysics(),
-                  itemCount: history.length,
-                  itemBuilder: (_, i) {
-                    final node = history[i];
-                    return ListTile(
-                      dense: true,
-                      title: Text(
-                        '第 ${node.chapterIndex} 幕'
-                        '${node.date.isEmpty ? '' : ' · ${node.date}'}',
-                        style: const TextStyle(fontSize: 14),
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 14),
+                      decoration: BoxDecoration(
+                        color: palette.muted.withValues(alpha: 0.35),
+                        borderRadius: BorderRadius.circular(2),
                       ),
-                      subtitle: node.playerAction == null
-                          ? null
-                          : Text(
-                              node.playerAction!,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                  Row(
+                    children: <Widget>[
+                      Icon(LucideIcons.gitBranch, size: 17, color: palette.accent),
+                      const SizedBox(width: 8),
+                      Text(
+                        '从哪一幕分岔？',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: palette.ink,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    '保留到该幕为止的剧情，之后重新做选择。当前世界线会原样保留，不会丢。',
+                    style: TextStyle(
+                      fontSize: 12,
+                      height: 1.55,
+                      color: palette.muted,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Flexible(
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      physics: const ClampingScrollPhysics(),
+                      itemCount: history.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 6),
+                      itemBuilder: (_, i) {
+                        final node = history[i];
+                        return FTappable(
+                          onPress: () {
+                            Navigator.pop(ctx);
+                            onPickIndex(i);
+                          },
+                          child: FCard(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 13,
+                                vertical: 10,
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: <Widget>[
+                                  Text(
+                                    '第 ${node.chapterIndex} 幕'
+                                    '${node.date.isEmpty ? '' : ' · ${node.date}'}',
+                                    style: TextStyle(
+                                      fontSize: 13.5,
+                                      fontWeight: FontWeight.w600,
+                                      color: palette.ink,
+                                    ),
+                                  ),
+                                  if ((node.playerAction ?? '').trim().isNotEmpty) ...<Widget>[
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      node.playerAction!.trim(),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: palette.muted,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
                             ),
-                      onTap: () {
-                        Navigator.pop(ctx);
-                        onPickIndex(i);
+                          ),
+                        );
                       },
-                    );
-                  },
-                ),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 8),
-            ],
+            ),
           ),
         ),
       ),

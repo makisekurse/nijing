@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:forui/forui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
@@ -19,6 +20,8 @@ import '../../services/save_service.dart';
 import '../../services/wakelock_service.dart';
 import '../../state/config_provider.dart';
 import '../themes/app_theme.dart';
+import '../themes/surface_ladder.dart';
+import '../widgets/app_toast.dart';
 import '../widgets/reader_chapter_card.dart';
 import '../widgets/reader_composer.dart';
 import '../widgets/reader_drawer.dart';
@@ -125,14 +128,14 @@ class _ReaderScreenState extends State<ReaderScreen>
     return p?.config ?? _config;
   }
 
-  void _applyConfigUpdate(AppConfig next) {
+  void _applyConfigUpdate(AppConfig next, {bool immediate = true}) {
     setState(() {
       _config = next;
       _godMode = next.godMode;
     });
     final p = _maybeConfigProvider();
     if (p != null) {
-      p.updateConfig(next, immediate: true);
+      p.updateConfig(next, immediate: immediate);
     } else {
       widget.onConfigChanged(next);
     }
@@ -551,107 +554,114 @@ class _ReaderScreenState extends State<ReaderScreen>
       context: context,
       side: FLayout.btt,
       mainAxisMaxRatio: 0.72,
-      builder: (ctx) => Container(
-        decoration: BoxDecoration(
-          color: palette.page,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        child: SafeArea(
-          top: false,
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(18, 12, 18, 22),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Center(
-                  child: Container(
-                    width: 36,
-                    height: 4,
-                    margin: const EdgeInsets.only(bottom: 14),
-                    decoration: BoxDecoration(
-                      color: palette.muted.withValues(alpha: 0.35),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ),
-                Text(
-                  '切换主力模型',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: palette.ink,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '当前：${Providers.byId(cfg.apiProvider).shortLabel} · ${Providers.resolveModelName(cfg)}',
-                  style: TextStyle(fontSize: 12.5, color: palette.muted),
-                ),
-                const SizedBox(height: 14),
-                if (profiles.isNotEmpty)
-                  FTileGroup(
-                    label: const Text('已保存的模型档案'),
-                    children: <FTileMixin>[
-                      for (final ModelProfile p in profiles)
-                        FTile(
-                          prefix: Icon(
-                            LucideIcons.cpu,
-                            size: 16,
-                            color: palette.accent,
-                          ),
-                          title: Text(p.name),
-                          subtitle: Text(
-                            '${Providers.byId(p.apiProvider).shortLabel} · ${p.modelName}',
-                          ),
-                          suffix: p.modelName == cfg.modelName &&
-                                  p.apiProvider == cfg.apiProvider
-                              ? Icon(
-                                  LucideIcons.check,
-                                  size: 16,
-                                  color: palette.accent,
-                                )
-                              : null,
-                          onPress: () async {
-                            Navigator.pop(ctx);
-                            if (cfgProvider != null) {
-                              await cfgProvider.applyProfile(p);
-                              if (mounted) {
-                                setState(() => _config = cfgProvider.config);
-                                _toast('已切换至 ${p.name}');
-                              }
-                            } else {
-                              _applyConfigUpdate(cfg.applyProfile(p));
-                            }
-                          },
-                        ),
-                    ],
-                  )
-                else
-                  FCard(
-                    child: Padding(
-                      padding: const EdgeInsets.all(14),
-                      child: Text(
-                        '还没有保存多个模型档案。前往「模型与接口设置」添加不同服务商或模型档案后，即可在这里一键切换且自动切换独立加密 Key。',
-                        style: TextStyle(
-                          fontSize: 12.5,
-                          height: 1.6,
-                          color: palette.muted,
-                        ),
+      builder: (ctx) => Material(
+        type: MaterialType.transparency,
+        child: Container(
+          decoration: BoxDecoration(
+            color: palette.page,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: SafeArea(
+            top: false,
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(18, 12, 18, 22),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 14),
+                      decoration: BoxDecoration(
+                        color: palette.muted.withValues(alpha: 0.35),
+                        borderRadius: BorderRadius.circular(2),
                       ),
                     ),
                   ),
-                const SizedBox(height: 12),
-                FButton(
-                  variant: FButtonVariant.outline,
-                  prefix: const Icon(LucideIcons.settings2, size: 15),
-                  onPress: () {
-                    Navigator.pop(ctx);
-                    _openSettings(section: SettingsSection.model);
-                  },
-                  child: const Text('管理模型与 API Key'),
-                ),
-              ],
+                  Text(
+                    '切换主力模型',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: palette.ink,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '当前：${Providers.byId(cfg.apiProvider).shortLabel} · ${Providers.resolveModelName(cfg)}',
+                    style: TextStyle(fontSize: 12.5, color: palette.muted),
+                  ),
+                  const SizedBox(height: 14),
+                  if (profiles.isNotEmpty)
+                    FTileGroup(
+                      label: const Text('已保存的模型档案'),
+                      children: <FTileMixin>[
+                        for (final ModelProfile p in profiles)
+                          FTile(
+                            prefix: Icon(
+                              LucideIcons.cpu,
+                              size: 16,
+                              color: palette.accent,
+                            ),
+                            title: Text(p.name),
+                            subtitle: Text(
+                              '${Providers.byId(p.apiProvider).shortLabel} · ${p.modelName}',
+                            ),
+                            suffix: (cfg.activeProfileId.isNotEmpty
+                                    ? p.id == cfg.activeProfileId
+                                    : (p.modelName == cfg.modelName &&
+                                        p.apiProvider == cfg.apiProvider &&
+                                        p.baseUrl == cfg.baseUrl &&
+                                        p.workspaceId == cfg.workspaceId))
+                                ? Icon(
+                                    LucideIcons.check,
+                                    size: 16,
+                                    color: palette.accent,
+                                  )
+                                : null,
+                            onPress: () async {
+                              Navigator.pop(ctx);
+                              if (cfgProvider != null) {
+                                await cfgProvider.applyProfile(p);
+                                if (mounted) {
+                                  setState(() => _config = cfgProvider.config);
+                                  _toast('已切换至 ${p.name}');
+                                }
+                              } else {
+                                _applyConfigUpdate(cfg.applyProfile(p));
+                              }
+                            },
+                          ),
+                      ],
+                    )
+                  else
+                    FCard(
+                      child: Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: Text(
+                          '还没有保存多个模型档案。前往「模型与接口设置」添加不同服务商或模型档案后，即可在这里一键切换且自动切换独立加密 Key。',
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            height: 1.6,
+                            color: palette.muted,
+                          ),
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 12),
+                  FButton(
+                    variant: FButtonVariant.outline,
+                    prefix: const Icon(LucideIcons.settings2, size: 15),
+                    onPress: () {
+                      Navigator.pop(ctx);
+                      _openSettings(section: SettingsSection.model);
+                    },
+                    child: const Text('管理模型与 API Key'),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -729,7 +739,7 @@ class _ReaderScreenState extends State<ReaderScreen>
 
   void _toast(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    AppToast.show(context, msg);
   }
 
   // ---------- 界面构建 ----------
@@ -744,10 +754,20 @@ class _ReaderScreenState extends State<ReaderScreen>
     final palette = AppTheme.readingOf(context);
     final ladder = AppTheme.ladderOf(context);
     final fontSize = AppTheme.getFontSize(cfg.fontSize);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final overlayStyle = (isDark
+            ? SystemUiOverlayStyle.light
+            : SystemUiOverlayStyle.dark)
+        .copyWith(
+      statusBarColor: Colors.transparent,
+      systemNavigationBarColor: Colors.transparent,
+    );
 
-    return Scaffold(
-      backgroundColor: palette.page,
-      body: Column(
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: overlayStyle,
+      child: Scaffold(
+        backgroundColor: palette.page,
+        body: Column(
         children: <Widget>[
           // 1. 克制、稳定的现代顶栏（绝不再 3 秒自动乱闪，明确返回按钮）
           _buildTopBar(palette, ladder, cfg),
@@ -862,12 +882,13 @@ class _ReaderScreenState extends State<ReaderScreen>
           ),
         ],
       ),
+      ),
     );
   }
 
   Widget _buildTopBar(
     ReadingPalette palette,
-    dynamic ladder,
+    SurfaceLadder ladder,
     AppConfig cfg,
   ) {
     final subtitleParts = <String>[

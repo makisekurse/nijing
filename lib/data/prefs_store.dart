@@ -12,14 +12,17 @@ class PrefsStore {
 
   static const Duration debounce = Duration(milliseconds: 700);
 
-  static SharedPreferences? _prefs;
   static final Map<String, Timer> _timers = <String, Timer>{};
   static final Map<String, Object?> _pending = <String, Object?>{};
 
-  static Future<SharedPreferences> _instance() async =>
-      _prefs ??= await SharedPreferences.getInstance();
+  static Future<SharedPreferences> _instance() =>
+      SharedPreferences.getInstance();
 
   static Future<String?> getString(String key) async {
+    if (_pending.containsKey(key)) {
+      final v = _pending[key];
+      return v is String ? v : null;
+    }
     final p = await _instance();
     return p.getString(key);
   }

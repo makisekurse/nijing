@@ -197,7 +197,7 @@ class ReaderChapterCard extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         if (act != null && act.trim().isNotEmpty)
-          ReaderActionCard(action: act),
+          ReaderActionCard(action: act, godMode: chapter.godMode),
         Padding(
           padding: const EdgeInsets.only(bottom: 12),
           child: Row(

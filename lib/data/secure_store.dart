@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../models/app_config.dart';
+import '../models/model_profile.dart';
+import '../services/providers.dart';
 import '../services/runtime_log.dart';
 
 /// 多服务商 / 多模型档案 / 主辅双模型分槽加密 API Key 存储（v2.0 升级）。
@@ -135,11 +137,16 @@ class SecureStore {
     final trimmed = value.trim();
     if (slotId != null && slotId.trim().isNotEmpty) {
       final cleanSlot = slotId.trim();
-      _memorySlots[cleanSlot] = trimmed;
-      await _registerSlotId(cleanSlot);
       if (trimmed.isEmpty) {
+        _memorySlots.remove(cleanSlot);
+        final removed = _knownSlotIds.remove(cleanSlot);
         await _deleteRaw(_storageKeyFor(cleanSlot));
+        if (removed) {
+          await _persistSlotIndex();
+        }
       } else {
+        _memorySlots[cleanSlot] = trimmed;
+        await _registerSlotId(cleanSlot);
         await _writeRaw(_storageKeyFor(cleanSlot), trimmed);
         RuntimeLog.registerSecret(trimmed);
       }
@@ -214,16 +221,34 @@ class SecureStore {
     await _persistSlotIndex();
   }
 
-  /// 读取当前主配置对应的有效 API Key。
-  static Future<String> readMainKeyForConfig(AppConfig config) =>
-      readKeyForProvider(config.apiProvider);
+  /// 读取当前主配置对应的有效 API Key（若绑定了同厂商有效档案则优先取档案 Key）。
+  static Future<String> readMainKeyForConfig(AppConfig config) async {
+    final pid = config.activeProfileId.trim();
+    if (pid.isNotEmpty) {
+      ModelProfile? matched;
+      for (final p in config.savedProfiles) {
+        if (p.id == pid) {
+          matched = p;
+          break;
+        }
+      }
+      if (matched != null && matched.apiProvider == config.apiProvider) {
+        final key = await readKeyForProfile(
+          pid,
+          fallbackProviderId: config.apiProvider,
+        );
+        if (key.isNotEmpty) return key;
+      }
+    }
+    return readKeyForProvider(config.apiProvider);
+  }
 
   /// 读取当前后台辅助模型对应的有效 API Key（支持跨厂商主辅双模型独立 Key！）。
   ///
   /// 优先级：
   /// 1. 独立配置的 `aux_model` 槽位（仅在开启独立辅模型时）；
   /// 2. 辅助服务商（`auxApiProvider`）对应的服务商槽位；
-  /// 3. 同服务商时回退主模型 Key。
+  /// 3. 仅当同服务商且同端点时才允许回退主模型 Key。
   static Future<String> readAuxKeyForConfig(AppConfig config) async {
     if (!config.enableAuxModel || config.auxModelName.trim().isEmpty) {
       return readMainKeyForConfig(config);
@@ -232,15 +257,22 @@ class SecureStore {
         await readApiKey(slotId: auxSlotId, fallbackToLegacy: false);
     if (dedicated.isNotEmpty) return dedicated;
 
-    final effProvider = config.auxApiProvider.trim().isEmpty
-        ? config.apiProvider
-        : config.auxApiProvider.trim();
-    final byProvider = await readKeyForProvider(
-      effProvider,
-      fallbackToLegacy: effProvider == config.apiProvider,
-    );
-    if (byProvider.isNotEmpty) return byProvider;
-    if (effProvider == config.apiProvider) {
+    final auxCfg = config.resolveAuxConfig();
+    final effProvider = auxCfg.apiProvider;
+    final sameProvider = effProvider == config.apiProvider;
+    final sameEndpoint = sameProvider &&
+        Providers.resolveBaseUrl(config) == Providers.resolveBaseUrl(auxCfg);
+
+    final canReadProviderSlot =
+        !(sameProvider && !sameEndpoint && effProvider == 'custom');
+    if (canReadProviderSlot) {
+      final byProvider = await readKeyForProvider(
+        effProvider,
+        fallbackToLegacy: sameEndpoint,
+      );
+      if (byProvider.isNotEmpty) return byProvider;
+    }
+    if (sameEndpoint) {
       return readMainKeyForConfig(config);
     }
     return '';

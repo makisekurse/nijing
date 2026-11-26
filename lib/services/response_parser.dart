@@ -390,34 +390,6 @@ class ResponseParser {
     return _bodyNoise.any((r) => r.hasMatch(t));
   }
 
-  /// 判断一段**正文通道**输出是否为拒答。
-  static bool looksLikeRefusal(String raw) {
-    final head = raw.trim();
-    if (head.isEmpty) return true;
-    final probe = head.length > 120 ? head.substring(0, 120) : head;
-    const markers = <String>[
-      '抱歉',
-      '对不起',
-      '无法协助',
-      '无法提供',
-      '不能提供',
-      '不便讨论',
-      '我无法',
-      '我不能',
-      '作为一个AI',
-      '作为一个 AI',
-      '作为人工智能',
-      '涉及敏感',
-      '违反相关规定',
-      '不予生成',
-      '换个话题',
-    ];
-    for (final m in markers) {
-      if (probe.contains(m)) return head.length < 400;
-    }
-    return false;
-  }
-
   static List<String> _splitItems(
     String block,
     String Function(String) clean,

@@ -214,15 +214,6 @@ void main() {
       expect(body.contains('<ca'), isFalse);
       expect(body.contains('正文开始'), isTrue);
     });
-
-    test('拒答识别', () {
-      expect(ResponseParser.looksLikeRefusal('抱歉，我无法协助这个请求。'), isTrue);
-      expect(ResponseParser.looksLikeRefusal(''), isTrue);
-      expect(
-        ResponseParser.looksLikeRefusal('1949年10月，常德前线司令部里灯火通明。'),
-        isFalse,
-      );
-    });
   });
 
   group('Annotation', () {
@@ -2604,12 +2595,17 @@ final x = 1;
             events.where((e) => e.kind == GenEventKind.failed).toList();
         expect(failedEvents.isNotEmpty, isTrue);
 
-        // 验证首 token 前重连轮次中，系统提示词绝不包含任何 retryNudge 训诫内容
+        // 验证首 token 前重连轮次中，系统提示词绝不包含任何 retryNudge 训诫/补充说明内容
         expect(mockClient.receivedMessages.length, greaterThanOrEqualTo(2));
+        final nudge1 = PromptBuilder.retryNudge(1).trim();
+        final nudge2 = PromptBuilder.retryNudge(2).trim();
         for (final reqMessages in mockClient.receivedMessages) {
           final sys = reqMessages.first['content'] ?? '';
+          expect(sys, isNot(contains('【补充说明】')));
+          expect(sys, isNot(contains('【再次说明】')));
+          expect(sys, isNot(contains(nudge1)));
+          expect(sys, isNot(contains(nudge2)));
           expect(sys, isNot(contains('【指令约束】')));
-          expect(sys, isNot(contains('【紧急约束】')));
           expect(sys, isNot(contains('不要评价')));
         }
       });

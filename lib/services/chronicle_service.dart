@@ -37,9 +37,11 @@ class ChronicleService {
     if (history.isEmpty) return previousChronicle;
 
     final auxConfig = config.resolveAuxConfig();
-    final effectiveWs = auxConfig.workspaceId.trim().isNotEmpty
+    // 严格以 auxConfig.workspaceId 为唯一真源（非 bailian 厂商或跨厂商未配置时恒为空串），
+    // 严禁将主配置的 workspaceId 跨厂商污染到辅模型 URL。
+    final effectiveWs = auxConfig.apiProvider == 'bailian'
         ? auxConfig.workspaceId.trim()
-        : workspaceId;
+        : '';
 
     final llm = client ?? LlmClient();
     try {

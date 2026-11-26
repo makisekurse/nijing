@@ -10,6 +10,7 @@ import 'chronicle_service.dart';
 import 'fallback_service.dart';
 import 'game_session.dart';
 import 'llm_client.dart';
+import 'providers.dart';
 import 'response_parser.dart';
 import 'runtime_log.dart';
 import 'save_service.dart';
@@ -29,28 +30,67 @@ class GenerationController extends ChangeNotifier {
   final String slotId;
   final LlmClient client;
 
-  GenerationController(this.slotId, {LlmClient? client})
+  /// 仅供测试注入后台档案官/编年史用客户端。
+  @visibleForTesting
+  LlmClient? auxClient;
+
+  GenerationController(this.slotId, {LlmClient? client, this.auxClient})
       : client = client ?? LlmClient();
 
   static final Map<String, GenerationController> _registry =
       <String, GenerationController>{};
 
-  static GenerationController forSlot(String slotId, {LlmClient? client}) {
-    if (client != null) {
-      return _registry[slotId] = GenerationController(slotId, client: client);
+  static GenerationController forSlot(
+    String slotId, {
+    LlmClient? client,
+    LlmClient? auxClient,
+  }) {
+    if (client != null || auxClient != null) {
+      return _registry[slotId] = GenerationController(
+        slotId,
+        client: client,
+        auxClient: auxClient,
+      );
     }
     return _registry.putIfAbsent(slotId, () => GenerationController(slotId));
   }
 
   static GenerationController? get(String slotId) => _registry[slotId];
 
+  /// 判断辅助模型在未填独立 Key 时是否允许安全回退复用主模型 Key：
+  /// 仅当未启用独立辅模型，或辅模型与主模型同服务商且同端点时才允许回退。
+  static bool canAuxFallbackToMainKey(AppConfig config) {
+    if (!config.enableAuxModel || config.auxModelName.trim().isEmpty) {
+      return true;
+    }
+    final aux = config.resolveAuxConfig();
+    if (aux.apiProvider != config.apiProvider) return false;
+    return Providers.resolveBaseUrl(config) == Providers.resolveBaseUrl(aux);
+  }
+
+  /// 解析后台辅助模型实际应使用的 API Key；跨厂商/异端点未配置独立 Key 时恒返回空串，绝不泄露主 Key。
+  static String resolveEffectiveAuxKey({
+    required AppConfig config,
+    required String mainApiKey,
+    required String auxApiKey,
+  }) {
+    if (auxApiKey.trim().isNotEmpty) return auxApiKey.trim();
+    if (canAuxFallbackToMainKey(config)) return mainApiKey.trim();
+    return '';
+  }
+
   // ---------- 状态 ----------
   GenerationStatus status = GenerationStatus.idle;
   bool get isBusy => status == GenerationStatus.generating;
   bool get isInterrupted => status == GenerationStatus.interrupted;
 
+  /// 单调递增代际号：隔离过期异步流，彻底杜绝 cancel() -> discardInterrupted() 后旧流误刷 failed。
+  int _runEpoch = 0;
+
   String pendingAction = '';
   bool _continuing = false;
+  bool _needThoughtSeparator = false;
+  List<String> _activeBackupChoices = const <String>[];
 
   /// 纯思考增量缓冲（物理独立）。
   final StringBuffer _thoughtBuf = StringBuffer();
@@ -62,21 +102,23 @@ class GenerationController extends ChangeNotifier {
   String liveThought = '';
   String liveBodyPreview = '';
 
-  /// 思考阶段精确计时（用于现代呼吸感思考胶囊展示与正文流出自动收起）。
+  /// 思考阶段精确计时（支持续写多段累加）。
   DateTime? _thinkingStartedAt;
   int thinkingDurationMs = 0;
 
   /// 当前是否正处于「只吐思考、尚未吐正文」的阶段。
   bool get isThinkingPhase =>
-      isBusy && _thoughtBuf.isNotEmpty && liveBodyPreview.isEmpty;
+      isBusy &&
+      _thoughtBuf.isNotEmpty &&
+      (liveBodyPreview.isEmpty || _thinkingStartedAt != null);
 
-  /// 当前已累计的思考耗时（毫秒，实时推进）。
+  /// 当前已累计的思考耗时（毫秒，支持续写累加实时推进）。
   int get liveThinkingDurationMs {
-    if (thinkingDurationMs > 0) return thinkingDurationMs;
     if (_thinkingStartedAt != null) {
-      return DateTime.now().difference(_thinkingStartedAt!).inMilliseconds;
+      return thinkingDurationMs +
+          DateTime.now().difference(_thinkingStartedAt!).inMilliseconds;
     }
-    return 0;
+    return thinkingDurationMs;
   }
 
   /// 兼容旧读写：合成文本视图。
@@ -110,7 +152,9 @@ class GenerationController extends ChangeNotifier {
   bool degraded = false;
   bool godMode = false;
   bool thoughtExpanded = false;
-  bool extractingInBackground = false;
+  int _pendingBgExtracts = 0;
+  bool get extractingInBackground => _pendingBgExtracts > 0;
+  Future<void> _bgExtractQueue = Future<void>.value();
 
   /// 用于「续写 / 重试」保留的上下文参数。
   AppConfig? _lastConfig;
@@ -132,6 +176,7 @@ class GenerationController extends ChangeNotifier {
     liveBodyPreview = '';
     _thinkingStartedAt = null;
     thinkingDurationMs = 0;
+    _needThoughtSeparator = false;
     _dirty = false;
     _throttleTimer?.cancel();
     _throttleTimer = null;
@@ -151,9 +196,10 @@ class GenerationController extends ChangeNotifier {
   }
 
   void _finishThinkingClockIfNeeded() {
-    if (_thinkingStartedAt != null && thinkingDurationMs == 0) {
-      thinkingDurationMs =
+    if (_thinkingStartedAt != null) {
+      thinkingDurationMs +=
           DateTime.now().difference(_thinkingStartedAt!).inMilliseconds;
+      _thinkingStartedAt = null;
     }
   }
 
@@ -189,13 +235,15 @@ class GenerationController extends ChangeNotifier {
   }) async {
     if (isBusy) return;
 
+    final epoch = ++_runEpoch;
     final backupChoices = List<String>.from(session.choices);
+    _activeBackupChoices = backupChoices;
     client.reset();
     this.session = session;
     this.godMode = godMode;
     _lastConfig = config;
     _lastApiKey = apiKey;
-    _lastAuxApiKey = auxApiKey ?? apiKey;
+    _lastAuxApiKey = auxApiKey ?? '';
     _lastBook = book;
     _continuing = false;
 
@@ -223,6 +271,7 @@ class GenerationController extends ChangeNotifier {
     );
 
     await _consumeStream(
+      epoch: epoch,
       stream: stream,
       session: session,
       config: config,
@@ -246,14 +295,18 @@ class GenerationController extends ChangeNotifier {
     final book = _lastBook;
     if (s == null || cfg == null || book == null) return;
 
+    final epoch = ++_runEpoch;
     final key = latestApiKey ?? _lastApiKey;
     _lastConfig = cfg;
     _lastApiKey = key;
     if (latestAuxApiKey != null) _lastAuxApiKey = latestAuxApiKey;
 
     final backupChoices = List<String>.from(s.choices);
+    _activeBackupChoices = backupChoices;
     client.reset();
     _continuing = true;
+    _finishThinkingClockIfNeeded();
+    _needThoughtSeparator = _thoughtBuf.isNotEmpty;
     status = GenerationStatus.generating;
     notice = '';
     noticeSticky = false;
@@ -276,6 +329,7 @@ class GenerationController extends ChangeNotifier {
     );
 
     await _consumeStream(
+      epoch: epoch,
       stream: stream,
       session: s,
       config: cfg,
@@ -333,6 +387,7 @@ class GenerationController extends ChangeNotifier {
   }
 
   Future<void> _consumeStream({
+    required int epoch,
     required Stream<GenEvent> stream,
     required GameSession session,
     required AppConfig config,
@@ -348,10 +403,15 @@ class GenerationController extends ChangeNotifier {
 
     try {
       await for (final ev in stream) {
+        if (epoch != _runEpoch) return;
         if (client.isCancelled) break;
         switch (ev.kind) {
           case GenEventKind.thoughtDelta:
             if (session.choices.isNotEmpty) session.clearChoices();
+            if (_needThoughtSeparator && ev.text.isNotEmpty) {
+              _thoughtBuf.write('\n\n');
+              _needThoughtSeparator = false;
+            }
             _markThinkingTick();
             _thoughtBuf.write(ev.text);
             _scheduleThrottledNotify();
@@ -400,6 +460,8 @@ class GenerationController extends ChangeNotifier {
         }
       }
 
+      if (epoch != _runEpoch) return;
+
       if (client.isCancelled) {
         _handleCancelled(session, backupChoices);
         return;
@@ -432,6 +494,7 @@ class GenerationController extends ChangeNotifier {
       }
       _flushNotifyNow();
     } catch (e) {
+      if (epoch != _runEpoch) return;
       if (client.isCancelled) {
         _handleCancelled(session, backupChoices);
         return;
@@ -469,7 +532,7 @@ class GenerationController extends ChangeNotifier {
     final prevStateSnapshot = session.worldState.copy();
     final elapsedThoughtMs = liveThinkingDurationMs;
 
-    session.appendChapter(
+    final committed = session.appendChapter(
       content: parsed.body,
       playerAction: action,
       date: parsed.date,
@@ -499,28 +562,46 @@ class GenerationController extends ChangeNotifier {
     if (wasDegraded || config == null || book == null) return;
 
     final targetLineId = session.line.id;
+    final targetChapterIndex = committed.chapterIndex;
     final targetChapterCount = session.history.length;
-    final effectiveAuxKey = _lastAuxApiKey.trim().isNotEmpty ? _lastAuxApiKey : apiKey;
+    final auxConfig = config.resolveAuxConfig();
+    final effectiveAuxKey = resolveEffectiveAuxKey(
+      config: config,
+      mainApiKey: apiKey,
+      auxApiKey: _lastAuxApiKey,
+    );
+    final auxUrl = Providers.chatCompletionsUrl(auxConfig);
+    final canRunAux = effectiveAuxKey.isNotEmpty ||
+        LlmClient.allowsEmptyKey(auxConfig, auxUrl);
+    if (!canRunAux) {
+      RuntimeLog.w(
+        'GenerationController',
+        '[$slotId] 跨厂商或独立端点辅模型（${auxConfig.apiProvider}/${auxConfig.modelName}）'
+            '未配置独立 API Key，为防止泄露主密钥已跳过后台档案与编年史任务',
+      );
+      return;
+    }
 
-    // 1. 后台档案官增量抽取（支持跨厂商主辅双模型各自独立 Key！）
-    if (config.enableBackgroundExtract && parsed.stateRaw.trim().isEmpty) {
-      unawaited(
-        _extractSceneInBackground(
-          session: session,
-          config: config,
-          apiKey: effectiveAuxKey,
-          book: book,
-          previousState: prevStateSnapshot,
-          chapterBody: parsed.body,
-          playerAction: action,
-          godMode: godMode,
-          expectedLineId: targetLineId,
-          expectedChapterCount: targetChapterCount,
-        ),
+    // 1. 后台档案官增量抽取（按 (lineId, chapterIndex) 串行排队定向合入，绝不因快节奏推演被丢弃）
+    final needsExtract = config.enableBackgroundExtract &&
+        (parsed.stateRaw.trim().isEmpty ||
+            (parsed.cast.isEmpty && parsed.glossary.isEmpty));
+    if (needsExtract) {
+      _enqueueBackgroundExtraction(
+        session: session,
+        config: config,
+        apiKey: effectiveAuxKey,
+        book: book,
+        previousState: prevStateSnapshot,
+        chapterBody: parsed.body,
+        playerAction: action,
+        godMode: godMode,
+        expectedLineId: targetLineId,
+        expectedChapterIndex: targetChapterIndex,
       );
     }
 
-    // 2. 每 5 幕后台非阻塞增量编年史压缩（同样走独立辅模型 Key）
+    // 2. 每 5 幕后台非阻塞增量编年史压缩（走独立辅模型 Key 与 auxConfig 专属 workspaceId）
     if (ChronicleService.shouldCompress(targetChapterCount)) {
       final historySnapshot = List.of(session.history);
       final prevChronicle = session.chronicle;
@@ -539,7 +620,38 @@ class GenerationController extends ChangeNotifier {
     }
   }
 
+  void _enqueueBackgroundExtraction({
+    required GameSession session,
+    required AppConfig config,
+    required String apiKey,
+    required WorldBook book,
+    required WorldState previousState,
+    required String chapterBody,
+    required String playerAction,
+    required bool godMode,
+    required String expectedLineId,
+    required int expectedChapterIndex,
+  }) {
+    _pendingBgExtracts++;
+    notifyListeners();
+    _bgExtractQueue = _bgExtractQueue.catchError((_) {}).then(
+          (_) => _extractSceneInBackground(
+            session: session,
+            config: config,
+            apiKey: apiKey,
+            book: book,
+            previousState: previousState,
+            chapterBody: chapterBody,
+            playerAction: playerAction,
+            godMode: godMode,
+            expectedLineId: expectedLineId,
+            expectedChapterIndex: expectedChapterIndex,
+          ),
+        );
+  }
+
   void _handleCancelled(GameSession session, List<String> backupChoices) {
+    _finishThinkingClockIfNeeded();
     _refreshPreviewsNow();
     if (hasLiveBody) {
       // 用户手动点中止时，如果已经吐出正文，也贴心保留在现场供续写或保存
@@ -570,10 +682,8 @@ class GenerationController extends ChangeNotifier {
     required String playerAction,
     required bool godMode,
     required String expectedLineId,
-    required int expectedChapterCount,
+    required int expectedChapterIndex,
   }) async {
-    extractingInBackground = true;
-    notifyListeners();
     try {
       final result = await SceneExtractorService.extract(
         config: config,
@@ -583,15 +693,19 @@ class GenerationController extends ChangeNotifier {
         chapterBody: chapterBody,
         playerAction: playerAction,
         godMode: godMode,
-        workspaceId: config.workspaceId,
+        client: auxClient,
       );
       if (result == null || result.isEmpty) return;
-      // CAS 校验：防止重开/删档/切线/新开下一幕后串写
       if (!identical(_registry[slotId], this)) return;
-      if (session.line.id != expectedLineId) return;
-      if (session.history.length != expectedChapterCount) return;
 
-      session.applyBackgroundExtraction(result, godMode: godMode);
+      final applied = session.applyBackgroundExtraction(
+        result,
+        godMode: godMode,
+        targetLineId: expectedLineId,
+        targetChapterIndex: expectedChapterIndex,
+      );
+      if (!applied) return;
+
       final updatedSlot = session.toSlot();
       await SaveService.upsert(updatedSlot);
       lastSavedSlot = updatedSlot;
@@ -599,7 +713,7 @@ class GenerationController extends ChangeNotifier {
     } catch (e) {
       RuntimeLog.w('GenerationController', '[$slotId] 后台状态抽取异常：$e');
     } finally {
-      extractingInBackground = false;
+      if (_pendingBgExtracts > 0) _pendingBgExtracts--;
       notifyListeners();
     }
   }
@@ -621,18 +735,22 @@ class GenerationController extends ChangeNotifier {
         book: book,
         previousChronicle: previousChronicle,
         history: historySnapshot,
-        workspaceId: config.workspaceId,
+        client: auxClient,
       );
       if (updated == previousChronicle || updated.trim().isEmpty) return;
       if (!identical(_registry[slotId], this)) return;
-      if (session.line.id != expectedLineId) return;
-      if (session.history.length < expectedChapterCount) return;
 
-      session.attachChronicle(updated);
+      final attached = session.attachChronicle(
+        updated,
+        targetLineId: expectedLineId,
+      );
+      if (!attached) return;
+
       final updatedSlot = session.toSlot();
       await SaveService.upsert(updatedSlot);
       lastSavedSlot = updatedSlot;
       RuntimeLog.i('GenerationController', '[$slotId] 后台编年史已更新并落盘');
+      notifyListeners();
     } catch (e) {
       RuntimeLog.w('GenerationController', '[$slotId] 后台编年史更新异常：$e');
     }
@@ -640,6 +758,7 @@ class GenerationController extends ChangeNotifier {
 
   void cancel() {
     client.cancel();
+    _finishThinkingClockIfNeeded();
     _refreshPreviewsNow();
     if (hasLiveBody) {
       status = GenerationStatus.interrupted;
@@ -653,10 +772,15 @@ class GenerationController extends ChangeNotifier {
     pendingAction = '';
     notice = '已中止本次推演。';
     noticeSticky = true;
+    final s = session;
+    if (s != null && s.choices.isEmpty && _activeBackupChoices.isNotEmpty) {
+      s.restoreChoices(_activeBackupChoices);
+    }
     notifyListeners();
   }
 
   void discardInterrupted() {
+    _runEpoch++;
     client.reset();
     status = GenerationStatus.idle;
     _clearLiveBuffers();
@@ -668,6 +792,7 @@ class GenerationController extends ChangeNotifier {
   }
 
   void reset() {
+    _runEpoch++;
     client.reset();
     status = GenerationStatus.idle;
     _clearLiveBuffers();
@@ -682,12 +807,16 @@ class GenerationController extends ChangeNotifier {
 
   static void disposeSlot(String slotId) {
     final c = _registry.remove(slotId);
-    c?._throttleTimer?.cancel();
-    c?.client.cancel();
+    if (c != null) {
+      c._runEpoch++;
+      c._throttleTimer?.cancel();
+      c.client.cancel();
+    }
   }
 
   static void resetAll() {
     for (final c in _registry.values) {
+      c._runEpoch++;
       c._throttleTimer?.cancel();
       c.client.cancel();
     }

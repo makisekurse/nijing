@@ -112,6 +112,7 @@ class FallbackService {
     );
 
     AppError? lastError;
+    var lastAttemptWasEmptyBody = false;
 
     for (var attempt = 0; attempt <= _maxPreBodyRetries; attempt++) {
       if (client.isCancelled) {
@@ -119,7 +120,10 @@ class FallbackService {
         return;
       }
 
-      final nudge = attempt > 0 ? PromptBuilder.retryNudge(attempt) : '';
+      // 严格区分“网络重试”与“空正文重试”：网络重试绝不拼接 retryNudge 提示词
+      final nudge = (attempt > 0 && lastAttemptWasEmptyBody)
+          ? PromptBuilder.retryNudge(attempt)
+          : '';
       final messages = PromptBuilder.buildMessages(
         systemPrompt: systemPrompt + nudge,
         history: history,
@@ -178,8 +182,13 @@ class FallbackService {
           return;
         }
 
-        // 尚未吐出任何正文：允许在重试额度内干净重连（绝不抹掉读者正在看的内容）
-        if (e.retryable && attempt < _maxPreBodyRetries) {
+        // 尚未吐出任何正文：若 LlmClient 层尚未完成退避重试（或仅吐思考后断流需先清思考缓冲），允许干净重连一次
+        final alreadyRetriedInClient =
+            client.lastStreamAttempts > 1 && !client.yieldedAny;
+        if (e.retryable &&
+            attempt < _maxPreBodyRetries &&
+            !alreadyRetriedInClient) {
+          lastAttemptWasEmptyBody = false;
           yield const GenEvent.restart();
           yield GenEvent.notice('${e.message} 正在重新连接（第 ${attempt + 2} 次）…');
           continue;
@@ -197,12 +206,28 @@ class FallbackService {
         content: contentRaw,
         thought: thoughtRaw,
       );
+      final finishReason = client.lastFinishReason;
 
       RuntimeLog.i(
         'Fallback',
         '第 ${attempt + 1} 轮完成：正文 ${parsed.body.length} 字 · '
-            '思考 ${parsed.thought.length} 字 · 分支 ${parsed.choices.length} 条',
+            '思考 ${parsed.thought.length} 字 · 分支 ${parsed.choices.length} 条'
+            '${finishReason == null ? '' : ' · finish_reason=$finishReason'}',
       );
+
+      // 若因 token 长度上限截断且尚未写出 <choices>，进入可续写 interrupted 态而非静默残缺落幕
+      if (finishReason == 'length' &&
+          parsed.body.trim().isNotEmpty &&
+          parsed.choices.isEmpty) {
+        RuntimeLog.w(
+          'Fallback',
+          '命中 finish_reason=length 且缺少 <choices>，原地保留正文并转入可续写中断态',
+        );
+        yield const GenEvent.interrupted(
+          '本幕输出达到单次长度上限（已完整保留上方正文，可点击「继续生成」补完）',
+        );
+        return;
+      }
 
       // 只要有非空正文，立刻正常落幕！绝不因为缺少 <choices> 或字数偏短就清屏重来！
       if (parsed.body.trim().isNotEmpty) {
@@ -210,8 +235,9 @@ class FallbackService {
         return;
       }
 
-      // 全空正文（屏幕此时本来为空）：允许改写重试一次
+      // 全空正文（屏幕此时本来为空）：允许附带补充说明重试一次
       lastError = const AppError(AppErrorKind.refused, '模型返回了空正文。');
+      lastAttemptWasEmptyBody = true;
       if (attempt < _maxPreBodyRetries) {
         yield const GenEvent.restart();
         yield const GenEvent.notice('模型未输出正文，正在重试…');
@@ -298,6 +324,14 @@ class FallbackService {
       content: mergedContent,
       thought: mergedThought,
     );
+    if (client.lastFinishReason == 'length' &&
+        parsed.body.trim().isNotEmpty &&
+        parsed.choices.isEmpty) {
+      yield const GenEvent.interrupted(
+        '续写再次达到长度上限（已保留全部正文，可继续生成或直接落幕）',
+      );
+      return;
+    }
     if (parsed.body.trim().isNotEmpty) {
       yield GenEvent.done(parsed);
     } else {

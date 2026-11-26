@@ -10,6 +10,8 @@ import '../../services/llm_client.dart';
 import '../../services/providers.dart';
 import '../../state/config_provider.dart';
 import '../themes/app_theme.dart';
+import '../themes/surface_ladder.dart';
+import 'app_toast.dart';
 import 'remote_model_picker_sheet.dart';
 
 /// 设置页「模型与接口」完整面板（`forui` 骨架 + 分槽独立加密 Key + 动态 `/models` + 跨厂商主辅双模型）。
@@ -42,9 +44,19 @@ class _SettingsModelSectionState extends State<SettingsModelSection> {
   bool _obscure = true;
   bool _obscureAux = true;
   bool _testing = false;
+  bool _syncingControllers = false;
   String _testResult = '';
 
   AppConfig get _cfg => widget.config;
+
+  void _runControllerSync(VoidCallback fn) {
+    _syncingControllers = true;
+    try {
+      fn();
+    } finally {
+      _syncingControllers = false;
+    }
+  }
 
   @override
   void initState() {
@@ -60,6 +72,50 @@ class _SettingsModelSectionState extends State<SettingsModelSection> {
   }
 
   @override
+  void didUpdateWidget(covariant SettingsModelSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final oldCfg = oldWidget.config;
+    final nextCfg = widget.config;
+    final routeChanged = oldCfg.apiProvider != nextCfg.apiProvider ||
+        oldCfg.activeProfileId != nextCfg.activeProfileId;
+
+    if (routeChanged) {
+      _runControllerSync(() {
+        _wsCtrl.text = nextCfg.workspaceId;
+        _modelCtrl.text = nextCfg.modelName;
+        _baseUrlCtrl.text = nextCfg.baseUrl;
+        _auxModelCtrl.text = nextCfg.auxModelName;
+        _auxBaseUrlCtrl.text = nextCfg.auxBaseUrl;
+      });
+      _loadKeysForCurrentProvider();
+      return;
+    }
+
+    _runControllerSync(() {
+      if (oldCfg.workspaceId != nextCfg.workspaceId &&
+          _wsCtrl.text.trim() != nextCfg.workspaceId.trim()) {
+        _wsCtrl.text = nextCfg.workspaceId;
+      }
+      if (oldCfg.modelName != nextCfg.modelName &&
+          _modelCtrl.text != nextCfg.modelName) {
+        _modelCtrl.text = nextCfg.modelName;
+      }
+      if (oldCfg.baseUrl != nextCfg.baseUrl &&
+          _baseUrlCtrl.text.trim() != nextCfg.baseUrl.trim()) {
+        _baseUrlCtrl.text = nextCfg.baseUrl;
+      }
+      if (oldCfg.auxModelName != nextCfg.auxModelName &&
+          _auxModelCtrl.text.trim() != nextCfg.auxModelName.trim()) {
+        _auxModelCtrl.text = nextCfg.auxModelName;
+      }
+      if (oldCfg.auxBaseUrl != nextCfg.auxBaseUrl &&
+          _auxBaseUrlCtrl.text.trim() != nextCfg.auxBaseUrl.trim()) {
+        _auxBaseUrlCtrl.text = nextCfg.auxBaseUrl;
+      }
+    });
+  }
+
+  @override
   void dispose() {
     _keyCtrl.dispose();
     _wsCtrl.dispose();
@@ -72,17 +128,22 @@ class _SettingsModelSectionState extends State<SettingsModelSection> {
   }
 
   Future<void> _loadKeysForCurrentProvider() async {
-    final mainKey = await SecureStore.readKeyForProvider(_cfg.apiProvider);
+    final p = widget.configProvider;
+    final mainKey = p != null
+        ? await p.resolveActiveMainKey()
+        : await SecureStore.readMainKeyForConfig(_cfg);
     final auxKey = await SecureStore.readAuxDedicatedKey();
     if (!mounted) return;
     setState(() {
-      _keyCtrl.text = mainKey;
-      _auxKeyCtrl.text = auxKey;
+      _runControllerSync(() {
+        _keyCtrl.text = mainKey;
+        _auxKeyCtrl.text = auxKey;
+      });
     });
   }
 
   Future<void> _switchProvider(String providerId) async {
-    if (providerId == _cfg.apiProvider) return;
+    if (providerId == _cfg.apiProvider && _cfg.activeProfileId.isEmpty) return;
     HapticFeedback.selectionClick();
     final p = Providers.byId(providerId);
     final savedKey = await SecureStore.readKeyForProvider(
@@ -90,9 +151,11 @@ class _SettingsModelSectionState extends State<SettingsModelSection> {
       fallbackToLegacy: false,
     );
     if (!mounted) return;
-    _keyCtrl.text = savedKey;
-    _modelCtrl.text = p.defaultModel;
-    _baseUrlCtrl.text = '';
+    _runControllerSync(() {
+      _keyCtrl.text = savedKey;
+      _modelCtrl.text = p.defaultModel;
+      _baseUrlCtrl.text = '';
+    });
     setState(() => _testResult = '');
     widget.onApply(
       _cfg.copyWith(
@@ -100,6 +163,7 @@ class _SettingsModelSectionState extends State<SettingsModelSection> {
         modelName: p.defaultModel,
         baseUrl: '',
         reasoningDialect: 'auto',
+        activeProfileId: '',
       ),
       immediate: true,
     );
@@ -207,14 +271,15 @@ class _SettingsModelSectionState extends State<SettingsModelSection> {
         await SecureStore.writeKeyForProfile(profile.id, _keyCtrl.text.trim());
       }
       widget.onApply(
-        _cfg.copyWith(savedProfiles: <ModelProfile>[..._cfg.savedProfiles, profile]),
+        _cfg.copyWith(
+          savedProfiles: <ModelProfile>[..._cfg.savedProfiles, profile],
+          activeProfileId: profile.id,
+        ),
         immediate: true,
       );
     }
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已保存模型档案「$name」')),
-      );
+      AppToast.show(context, '已保存模型档案「$name」');
     }
   }
 
@@ -232,14 +297,14 @@ class _SettingsModelSectionState extends State<SettingsModelSection> {
       widget.onApply(_cfg.applyProfile(profile), immediate: true);
     }
     if (!mounted) return;
-    _keyCtrl.text = key;
-    _wsCtrl.text = profile.workspaceId;
-    _modelCtrl.text = profile.modelName;
-    _baseUrlCtrl.text = profile.baseUrl;
+    _runControllerSync(() {
+      _keyCtrl.text = key;
+      _wsCtrl.text = profile.workspaceId;
+      _modelCtrl.text = profile.modelName;
+      _baseUrlCtrl.text = profile.baseUrl;
+    });
     setState(() => _testResult = '');
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('已切换至档案「${profile.name}」')),
-    );
+    AppToast.show(context, '已切换至档案「${profile.name}」');
   }
 
   Future<void> _deleteProfile(ModelProfile profile) async {
@@ -310,8 +375,12 @@ class _SettingsModelSectionState extends State<SettingsModelSection> {
                   suffix: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
-                      if (prof.modelName == _cfg.modelName &&
-                          prof.apiProvider == _cfg.apiProvider)
+                      if (_cfg.activeProfileId.isNotEmpty
+                          ? prof.id == _cfg.activeProfileId
+                          : (prof.modelName == _cfg.modelName &&
+                              prof.apiProvider == _cfg.apiProvider &&
+                              prof.baseUrl == _cfg.baseUrl &&
+                              prof.workspaceId == _cfg.workspaceId))
                         Padding(
                           padding: const EdgeInsets.only(right: 6),
                           child: Icon(
@@ -320,9 +389,8 @@ class _SettingsModelSectionState extends State<SettingsModelSection> {
                             color: palette.accent,
                           ),
                         ),
-                      InkWell(
-                        borderRadius: BorderRadius.circular(6),
-                        onTap: () => _deleteProfile(prof),
+                      FTappable(
+                        onPress: () => _deleteProfile(prof),
                         child: Padding(
                           padding: const EdgeInsets.all(4),
                           child: Icon(
@@ -381,22 +449,35 @@ class _SettingsModelSectionState extends State<SettingsModelSection> {
                   control: FTextFieldControl.managed(
                     controller: _keyCtrl,
                     onChange: (v) {
-                      SecureStore.writeKeyForProvider(
-                        _cfg.apiProvider,
-                        v.text.trim(),
-                      );
+                      if (_syncingControllers) return;
+                      final trimmed = v.text.trim();
+                      final activePid = _cfg.activeProfileId.trim();
+                      if (activePid.isNotEmpty) {
+                        SecureStore.writeKeyForProfile(activePid, trimmed);
+                      } else {
+                        SecureStore.writeKeyForProvider(
+                          _cfg.apiProvider,
+                          trimmed,
+                        );
+                      }
                     },
                   ),
-                  label: Text('${provider.shortLabel} API Key（分槽加密独立存储）'),
+                  label: Text(
+                    _cfg.activeProfileId.trim().isNotEmpty
+                        ? '${provider.shortLabel} API Key（当前档案独立加密槽位）'
+                        : '${provider.shortLabel} API Key（分槽加密独立存储）',
+                  ),
                   hint: 'sk-xxxx',
                   obscureText: _obscure,
-                  suffixBuilder: (_, _, _) => IconButton(
-                    icon: Icon(
+                  suffixBuilder: (_, _, _) => FButton.icon(
+                    variant: FButtonVariant.ghost,
+                    size: FButtonSizeVariant.xs,
+                    onPress: () => setState(() => _obscure = !_obscure),
+                    child: Icon(
                       _obscure ? LucideIcons.eyeOff : LucideIcons.eye,
-                      size: 17,
+                      size: 16,
                       color: palette.muted,
                     ),
-                    onPressed: () => setState(() => _obscure = !_obscure),
                   ),
                   description: Text(
                     SecureStore.isDegraded
@@ -409,9 +490,12 @@ class _SettingsModelSectionState extends State<SettingsModelSection> {
                   FTextField(
                     control: FTextFieldControl.managed(
                       controller: _wsCtrl,
-                      onChange: (v) => widget.onApply(
-                        _cfg.copyWith(workspaceId: v.text.trim()),
-                      ),
+                      onChange: (v) {
+                        if (_syncingControllers) return;
+                        widget.onApply(
+                          _cfg.copyWith(workspaceId: v.text.trim()),
+                        );
+                      },
                     ),
                     label: const Text('华北 2 业务空间 ID（选填）'),
                     hint: '填了自动走专属加速域名',
@@ -422,9 +506,12 @@ class _SettingsModelSectionState extends State<SettingsModelSection> {
                   FTextField(
                     control: FTextFieldControl.managed(
                       controller: _baseUrlCtrl,
-                      onChange: (v) => widget.onApply(
-                        _cfg.copyWith(baseUrl: v.text.trim()),
-                      ),
+                      onChange: (v) {
+                        if (_syncingControllers) return;
+                        widget.onApply(
+                          _cfg.copyWith(baseUrl: v.text.trim()),
+                        );
+                      },
                     ),
                     label: const Text('Base URL'),
                     hint: 'https://api.example.com/v1',
@@ -438,9 +525,12 @@ class _SettingsModelSectionState extends State<SettingsModelSection> {
                       child: FTextField(
                         control: FTextFieldControl.managed(
                           controller: _modelCtrl,
-                          onChange: (v) => widget.onApply(
-                            _cfg.copyWith(modelName: v.text),
-                          ),
+                          onChange: (v) {
+                            if (_syncingControllers) return;
+                            widget.onApply(
+                              _cfg.copyWith(modelName: v.text),
+                            );
+                          },
                         ),
                         label: const Text('主力模型代码'),
                         hint: provider.defaultModel.isEmpty
@@ -778,9 +868,12 @@ class _SettingsModelSectionState extends State<SettingsModelSection> {
                               child: FTextField(
                                 control: FTextFieldControl.managed(
                                   controller: _auxModelCtrl,
-                                  onChange: (v) => widget.onApply(
-                                    _cfg.copyWith(auxModelName: v.text.trim()),
-                                  ),
+                                  onChange: (v) {
+                                    if (_syncingControllers) return;
+                                    widget.onApply(
+                                      _cfg.copyWith(auxModelName: v.text.trim()),
+                                    );
+                                  },
                                 ),
                                 label: const Text('辅助模型代码'),
                                 hint: '例如 qwen3.8-flash / deepseek-flash',
@@ -804,9 +897,12 @@ class _SettingsModelSectionState extends State<SettingsModelSection> {
                           FTextField(
                             control: FTextFieldControl.managed(
                               controller: _auxBaseUrlCtrl,
-                              onChange: (v) => widget.onApply(
-                                _cfg.copyWith(auxBaseUrl: v.text.trim()),
-                              ),
+                              onChange: (v) {
+                                if (_syncingControllers) return;
+                                widget.onApply(
+                                  _cfg.copyWith(auxBaseUrl: v.text.trim()),
+                                );
+                              },
                             ),
                             label: const Text('辅助接口 Base URL（留空复用主端点）'),
                             hint: 'https://api.example.com/v1',
@@ -816,22 +912,26 @@ class _SettingsModelSectionState extends State<SettingsModelSection> {
                         FTextField(
                           control: FTextFieldControl.managed(
                             controller: _auxKeyCtrl,
-                            onChange: (v) =>
-                                SecureStore.writeAuxKey(v.text.trim()),
+                            onChange: (v) {
+                              if (_syncingControllers) return;
+                              SecureStore.writeAuxKey(v.text.trim());
+                            },
                           ),
                           label: const Text('辅助模型专属 Key（留空自动用对应服务商槽位 Key）'),
                           hint: '跨厂商且未配置过对应服务商时可在此单独填',
                           obscureText: _obscureAux,
-                          suffixBuilder: (_, _, _) => IconButton(
-                            icon: Icon(
+                          suffixBuilder: (_, _, _) => FButton.icon(
+                            variant: FButtonVariant.ghost,
+                            size: FButtonSizeVariant.xs,
+                            onPress: () =>
+                                setState(() => _obscureAux = !_obscureAux),
+                            child: Icon(
                               _obscureAux
                                   ? LucideIcons.eyeOff
                                   : LucideIcons.eye,
                               size: 16,
                               color: palette.muted,
                             ),
-                            onPressed: () =>
-                                setState(() => _obscureAux = !_obscureAux),
                           ),
                         ),
                       ],
@@ -851,12 +951,11 @@ class _SettingsModelSectionState extends State<SettingsModelSection> {
     required String label,
     required bool selected,
     required ReadingPalette palette,
-    required dynamic ladder,
+    required SurfaceLadder ladder,
     required VoidCallback onTap,
   }) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(10),
-      onTap: onTap,
+    return FTappable(
+      onPress: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 6),
         alignment: Alignment.center,
@@ -886,12 +985,11 @@ class _SettingsModelSectionState extends State<SettingsModelSection> {
     required String label,
     required bool selected,
     required ReadingPalette palette,
-    required dynamic ladder,
+    required SurfaceLadder ladder,
     required VoidCallback onTap,
   }) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(9),
-      onTap: () {
+    return FTappable(
+      onPress: () {
         HapticFeedback.selectionClick();
         onTap();
       },

@@ -4,6 +4,7 @@ import 'package:forui/forui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../themes/app_theme.dart';
+import '../themes/surface_ladder.dart';
 
 /// 现代贴底交互舱（吸收 Kelivo 固定底栏 + 建议行动药丸 + 断流续写提示条）。
 ///
@@ -124,7 +125,7 @@ class ReaderComposer extends StatelessWidget {
   Widget _buildInterruptedBanner(
     BuildContext context,
     ReadingPalette palette,
-    dynamic ladder,
+    SurfaceLadder ladder,
   ) {
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
@@ -209,7 +210,7 @@ class ReaderComposer extends StatelessWidget {
     );
   }
 
-  Widget _buildNoticeStrip(ReadingPalette palette, dynamic ladder) {
+  Widget _buildNoticeStrip(ReadingPalette palette, SurfaceLadder ladder) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
@@ -233,7 +234,7 @@ class ReaderComposer extends StatelessWidget {
     );
   }
 
-  Widget _buildChoicesPanel(ReadingPalette palette, dynamic ladder) {
+  Widget _buildChoicesPanel(ReadingPalette palette, SurfaceLadder ladder) {
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -361,7 +362,7 @@ class ReaderComposer extends StatelessWidget {
   Widget _buildInputBar(
     BuildContext context,
     ReadingPalette palette,
-    dynamic ladder,
+    SurfaceLadder ladder,
   ) {
     return Container(
       padding: const EdgeInsets.fromLTRB(8, 5, 6, 5),

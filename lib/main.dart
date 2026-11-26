@@ -46,6 +46,49 @@ class HistSimApp extends StatefulWidget {
     required this.showOnboarding,
   });
 
+  /// 生产与同构测试共用的根宿主包装（严禁人为套假 Material `Scaffold`）：
+  /// - `FTheme` 注入 `forui` 触控与色阶体系；
+  /// - `Material(type: MaterialType.transparency)` 为全应用路由及 `forui` 容器内的材质控件兜底祖先；
+  /// - `FToaster` 承接全应用无 `Scaffold` 依赖的 Toast 提示。
+  static Widget buildAppShell(
+    BuildContext context, {
+    required FThemeData fTheme,
+    Widget? child,
+  }) =>
+      FTheme(
+        data: fTheme,
+        child: Material(
+          type: MaterialType.transparency,
+          child: FToaster(
+            child: child ?? const SizedBox.shrink(),
+          ),
+        ),
+      );
+
+  /// 构造与生产环境完全同构的 `MaterialApp`（供测试直接挂载任意页面而不套假 `Scaffold`）。
+  static Widget buildHostApp({
+    required String themeMode,
+    required Widget home,
+    GlobalKey<NavigatorState>? navigatorKey,
+  }) {
+    final fTheme = AppTheme.getForuiTheme(themeMode);
+    final mTheme = AppTheme.getTheme(themeMode);
+    return MaterialApp(
+      title: AppInfo.appName,
+      debugShowCheckedModeBanner: false,
+      navigatorKey: navigatorKey,
+      theme: mTheme,
+      localizationsDelegates: FLocalizations.localizationsDelegates,
+      supportedLocales: FLocalizations.supportedLocales,
+      builder: (context, child) => buildAppShell(
+        context,
+        fTheme: fTheme,
+        child: child,
+      ),
+      home: home,
+    );
+  }
+
   @override
   State<HistSimApp> createState() => _HistSimAppState();
 }
@@ -110,21 +153,9 @@ class _HistSimAppState extends State<HistSimApp> with WidgetsBindingObserver {
       ],
       child: Consumer<ConfigProvider>(
         builder: (context, cfgProvider, _) {
-          final mode = cfgProvider.config.themeMode;
-          final fTheme = AppTheme.getForuiTheme(mode);
-          final mTheme = AppTheme.getTheme(mode);
-
-          return MaterialApp(
-            title: AppInfo.appName,
-            debugShowCheckedModeBanner: false,
+          return HistSimApp.buildHostApp(
+            themeMode: cfgProvider.config.themeMode,
             navigatorKey: _navKey,
-            theme: mTheme,
-            localizationsDelegates: FLocalizations.localizationsDelegates,
-            supportedLocales: FLocalizations.supportedLocales,
-            builder: (context, child) => FTheme(
-              data: fTheme,
-              child: child ?? const SizedBox.shrink(),
-            ),
             home: _onboarding
                 ? OnboardingScreen(
                     onConfigure: () => _finishOnboarding(openSettings: true),

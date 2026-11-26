@@ -17,16 +17,21 @@ class RemoteModelPickerSheet {
     required String apiKey,
     String? workspaceId,
     String currentModel = '',
+    Future<List<RemoteModelInfo>> Function()? fetcher,
   }) {
     return showFSheet<String>(
       context: context,
       side: FLayout.btt,
       mainAxisMaxRatio: 0.85,
-      builder: (ctx) => _RemoteModelPickerBody(
-        config: config,
-        apiKey: apiKey,
-        workspaceId: workspaceId,
-        currentModel: currentModel,
+      builder: (ctx) => Material(
+        type: MaterialType.transparency,
+        child: _RemoteModelPickerBody(
+          config: config,
+          apiKey: apiKey,
+          workspaceId: workspaceId,
+          currentModel: currentModel,
+          fetcher: fetcher,
+        ),
       ),
     );
   }
@@ -37,12 +42,14 @@ class _RemoteModelPickerBody extends StatefulWidget {
   final String apiKey;
   final String? workspaceId;
   final String currentModel;
+  final Future<List<RemoteModelInfo>> Function()? fetcher;
 
   const _RemoteModelPickerBody({
     required this.config,
     required this.apiKey,
     this.workspaceId,
     required this.currentModel,
+    this.fetcher,
   });
 
   @override
@@ -74,11 +81,13 @@ class _RemoteModelPickerBodyState extends State<_RemoteModelPickerBody> {
       _error = '';
     });
     try {
-      final list = await Providers.fetchRemoteModels(
-        config: widget.config,
-        apiKey: widget.apiKey,
-        workspaceId: widget.workspaceId,
-      );
+      final list = widget.fetcher != null
+          ? await widget.fetcher!()
+          : await Providers.fetchRemoteModels(
+              config: widget.config,
+              apiKey: widget.apiKey,
+              workspaceId: widget.workspaceId,
+            );
       if (!mounted) return;
       setState(() {
         _all = list;
@@ -240,9 +249,8 @@ class _RemoteModelPickerBodyState extends State<_RemoteModelPickerBody> {
                                   final m = items[i];
                                   final isCurrent =
                                       m.id == widget.currentModel.trim();
-                                  return InkWell(
-                                    borderRadius: BorderRadius.circular(11),
-                                    onTap: () {
+                                  return FTappable(
+                                    onPress: () {
                                       HapticFeedback.selectionClick();
                                       Navigator.pop(context, m.id);
                                     },

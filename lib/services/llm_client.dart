@@ -127,14 +127,21 @@ class LlmClient {
 
   final Duration connectTimeout;
   final Duration idleTimeout;
-  static const int _maxPreFirstTokenRetries = 2;
+  static const int _maxPreFirstTokenRetries = 1;
 
   http.Client? _client;
   Completer<void>? _cancelSignal;
   bool _cancelled = false;
   bool _yieldedAny = false;
+  bool _yieldedContent = false;
+  String? _lastFinishReason;
+  int _lastStreamAttempts = 0;
 
   bool get isCancelled => _cancelled;
+  bool get yieldedAny => _yieldedAny;
+  bool get yieldedContent => _yieldedContent;
+  String? get lastFinishReason => _lastFinishReason;
+  int get lastStreamAttempts => _lastStreamAttempts;
 
   /// 立刻中止当前请求与任何退避等待。
   void cancel() {
@@ -149,11 +156,14 @@ class LlmClient {
   void reset() {
     _cancelled = false;
     _yieldedAny = false;
+    _yieldedContent = false;
+    _lastFinishReason = null;
+    _lastStreamAttempts = 0;
     _cancelSignal = Completer<void>();
   }
 
   /// 是否允许空 Key（例如本地 Ollama / LM Studio / 局域网自建网关）。
-  static bool _allowsEmptyKey(AppConfig config, String url) {
+  static bool allowsEmptyKey(AppConfig config, String url) {
     if (config.apiProvider != 'custom') return false;
     final lower = url.toLowerCase();
     return lower.contains('://localhost') ||
@@ -208,7 +218,7 @@ class LlmClient {
         '尚未配置接口地址（Base URL），请前往「模型设置」填写。',
       );
     }
-    if (apiKey.trim().isEmpty && !_allowsEmptyKey(config, url)) {
+    if (apiKey.trim().isEmpty && !allowsEmptyKey(config, url)) {
       throw const AppError(
         AppErrorKind.auth,
         '尚未配置 API Key，请前往「模型设置」填写后再试。',
@@ -222,6 +232,7 @@ class LlmClient {
 
     while (true) {
       try {
+        _lastStreamAttempts++;
         yield* _singleStreamRequest(
           url: url,
           config: config,
@@ -235,8 +246,8 @@ class LlmClient {
       } on AppError catch (e) {
         if (_cancelled) rethrow;
 
-        // 铁律：一旦已经向界面产出过任意文字，绝不在网络层重跑！
-        if (_yieldedAny) rethrow;
+        // 铁律：一旦已产出正文绝不重跑；若仅吐思考尚无正文也交由上层先 reset 思考缓冲再重试，避免拼接重复思考。
+        if (_yieldedContent || _yieldedAny) rethrow;
 
         // 首帧前 400 参数自愈：自动降级不支持的思考参数 / temperature / max_tokens
         if (e.kind == AppErrorKind.badRequest) {
@@ -497,6 +508,7 @@ class LlmClient {
 
         if (first['finish_reason'] is String) {
           finishReason = first['finish_reason'] as String;
+          _lastFinishReason = finishReason;
         }
 
         final delta = first['delta'];
@@ -513,6 +525,9 @@ class LlmClient {
         if (content is String && content.isNotEmpty) {
           for (final chunk in splitter.feed(content)) {
             _yieldedAny = true;
+            if (chunk.isContent && chunk.text.trim().isNotEmpty) {
+              _yieldedContent = true;
+            }
             yield chunk;
           }
         }
@@ -520,6 +535,9 @@ class LlmClient {
 
       for (final tailChunk in splitter.flush()) {
         _yieldedAny = true;
+        if (tailChunk.isContent && tailChunk.text.trim().isNotEmpty) {
+          _yieldedContent = true;
+        }
         yield tailChunk;
       }
 
@@ -561,7 +579,7 @@ class LlmClient {
   }) async {
     final url = Providers.chatCompletionsUrl(config, workspaceId: workspaceId);
     if (url.isEmpty) return '请先填写 Base URL。';
-    if (apiKey.trim().isEmpty && !_allowsEmptyKey(config, url)) {
+    if (apiKey.trim().isEmpty && !allowsEmptyKey(config, url)) {
       return '还没有填 API Key。';
     }
     final model = Providers.resolveModelName(config);
@@ -630,7 +648,7 @@ class LlmClient {
     if (url.isEmpty) {
       throw const AppError(AppErrorKind.badRequest, '尚未配置接口 Base URL。');
     }
-    if (apiKey.trim().isEmpty && !_allowsEmptyKey(config, url)) {
+    if (apiKey.trim().isEmpty && !allowsEmptyKey(config, url)) {
       throw const AppError(AppErrorKind.auth, '尚未配置 API Key。');
     }
     final model = Providers.resolveModelName(config);

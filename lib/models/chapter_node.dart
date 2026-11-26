@@ -34,6 +34,9 @@ class ChapterNode {
   /// 本幕世界状态变更精简微标（如「移至重庆 · 新人物 2」，旧存档默认空）。
   final String stateDiffSummary;
 
+  /// 本幕是否由「主宰模式（最高权限）」推演生成（向下兼容旧存档，默认 false）。
+  final bool godMode;
+
   ChapterNode({
     required this.chapterIndex,
     required this.title,
@@ -49,6 +52,7 @@ class ChapterNode {
     this.thought = '',
     this.thinkingDurationMs = 0,
     this.stateDiffSummary = '',
+    this.godMode = false,
     DateTime? timestamp,
   })  : choices = choices ?? <String>[],
         glossary = glossary ?? <GlossaryEntry>[],
@@ -70,6 +74,7 @@ class ChapterNode {
         'thought': _capped(thought),
         if (thinkingDurationMs > 0) 'thinkingDurationMs': thinkingDurationMs,
         if (stateDiffSummary.isNotEmpty) 'stateDiffSummary': stateDiffSummary,
+        if (godMode) 'godMode': true,
         'timestamp': timestamp.toIso8601String(),
       };
 
@@ -104,6 +109,7 @@ class ChapterNode {
         thinkingDurationMs:
             (json['thinkingDurationMs'] as num?)?.toInt() ?? 0,
         stateDiffSummary: (json['stateDiffSummary'] ?? '').toString(),
+        godMode: json['godMode'] == true,
         timestamp: DateTime.tryParse((json['timestamp'] ?? '').toString()),
       );
 
@@ -118,6 +124,7 @@ class ChapterNode {
     String? thought,
     int? thinkingDurationMs,
     String? stateDiffSummary,
+    bool? godMode,
   }) =>
       ChapterNode(
         chapterIndex: chapterIndex,
@@ -134,6 +141,7 @@ class ChapterNode {
         thought: thought ?? this.thought,
         thinkingDurationMs: thinkingDurationMs ?? this.thinkingDurationMs,
         stateDiffSummary: stateDiffSummary ?? this.stateDiffSummary,
+        godMode: godMode ?? this.godMode,
         timestamp: timestamp,
       );
 

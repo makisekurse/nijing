@@ -1,6 +1,6 @@
 # 拟境 · nijing
 
-> 世界书驱动的沉浸式情境推演引擎（v2.0 全面换代）
+> 世界书驱动的沉浸式情境推演引擎（v2.0.3）
 
 把自己放进一个世界，做一个行动，看这个世界如何回应。
 
@@ -94,14 +94,15 @@ flutter analyze
 flutter test
 ```
 
-当前共 **204 项自动化单元测试与组件测试**（[`test/nijing_test.dart`](test/nijing_test.dart) + [`test/rescue_architecture_test.dart`](test/rescue_architecture_test.dart) + [`test/v2_architecture_test.dart`](test/v2_architecture_test.dart)），秒级全绿，覆盖：
+当前共 **215 项自动化单元测试与组件测试**（[`test/nijing_test.dart`](test/nijing_test.dart) + [`test/rescue_architecture_test.dart`](test/rescue_architecture_test.dart) + [`test/v2_architecture_test.dart`](test/v2_architecture_test.dart) + [`test/audit_ui_smoke_test.dart`](test/audit_ui_smoke_test.dart) + [`test/audit_core_regression_test.dart`](test/audit_core_regression_test.dart)），秒级全绿，覆盖：
 
-- **零清屏流式与原地续写**：首帧前退避重试、已吐正文断流发 `interrupted` 绝不清屏、`continueGeneration()` 无缝续写、`commitInterruptedAsChapter()` 直接落幕、角色台词零误杀
-- **2026 模型与方言引擎**：百炼 `enable_thinking` + 预算、DeepSeek V4 `thinking.type` + `reasoning_effort`、OpenAI `reasoning_effort`、远端 `/models` 多格式解析与旧模型退役检测
-- **多服务商分槽加密存储**：百炼 / DeepSeek / 自定义 / 档案 / 辅模型槽位严格隔离、旧版单 Key 向后兼容、运行日志全池多密钥自动脱敏
-- **主辅双模型后台抽取与编年史**：`SceneExtractorService` 容错 JSON 解析与变更摘要、`GameSession` 快照一致性、CAS 防串写保护与非阻塞增量编年史
-- **原生双轨流与原子存档**：跨帧 `<think>` 零泄漏、`slot_<id>.json` 原子写入与坏档隔离、旧存档无缝迁移
-- **文学富文本与 `forui` UI 组件**：行内加粗/斜体不露裸星号、`>` 引用块、HCT 五级容器、`ThinkingCapsule` / `ReaderComposer` / `WorldBookCover` / `ReaderScreen` 视口停泊组件渲染测试
+- **同构整页渲染与 `forui` 弹层冒烟**：不套假 Material `Scaffold`，直接挂载生产 `HistSimApp` / `FTheme` + `FToaster` 渲染主页三 Tab、引导页、设置全模块、快速创建页、世界书编辑页、阅读页 + `Aa` 排版浮层 + 右侧抽屉 4 Tab + 远端模型选择器与全部附属弹层，零 `No Material`、零溢出、零 `ScaffoldMessenger` 断言
+- **零清屏流式、长度截断与代际状态机**：首帧前退避重试收敛、网络重试零注入 `retryNudge`、已吐正文断流及 `finish_reason == 'length'` 自动转 `interrupted` 原地保留、`continueGeneration()` 续写思考分段与计时累加、`cancel()` + `discardInterrupted()` 代际 `_runEpoch` 防误刷 `failed`、角色台词零误杀
+- **2026 模型与方言引擎**：百炼 `enable_thinking` + 预算、DeepSeek V4 `thinking.type` + `reasoning_effort`、OpenAI `reasoning_effort`、基于 `package:http` 的远端 `/models` 多格式解析与旧模型退役检测
+- **多服务商分槽加密存储与防泄露**：百炼 / DeepSeek / 自定义 / 档案 / 辅模型槽位严格隔离、`activeProfileId` 持久化与手动切厂商防串 Key、`applyProfile` 不污染全局厂商槽、跨厂商辅模型无 Key 绝不泄露主 Key、主 `workspaceId` 不污染跨厂辅模型 URL、运行日志全池多密钥自动脱敏
+- **主辅双模型后台抽取与编年史**：`SceneExtractorService` 容错 JSON 解析与变更摘要、按 `(lineId, chapterIndex)` 串行定向合入快节奏不丢幕与后续快照顺延重算、非阻塞增量编年史与 `notifyListeners` 刷新
+- **原生双轨流与并发安全原子存档**：跨帧 `<think>` 零泄漏、`SaveService` 按槽串行写队列 + 独立临时文件原子写 + `.bak` 断电自愈 + 坏档隔离、旧存档无缝迁移
+- **文学富文本与 `forui` UI 组件**：行内加粗/斜体不露裸星号、`>` 引用块、HCT 五级容器、单幕 `godMode` 持久化金色敕令样式、`ThinkingCapsule` / `ReaderComposer` / `WorldBookCover` / `ReaderScreen` 视口停泊组件渲染测试
 
 ---
 

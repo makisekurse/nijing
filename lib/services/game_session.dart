@@ -182,6 +182,7 @@ class GameSession {
       thought: thought,
       thinkingDurationMs: thinkingDurationMs,
       stateDiffSummary: stateDiffSummary,
+      godMode: godMode,
     );
 
     target.history = <ChapterNode>[...target.history, node];
@@ -191,49 +192,118 @@ class GameSession {
     return node;
   }
 
-  /// 将后台档案官提取的增量状态、新人物与词条合并到当前最后一幕及世界状态快照。
+  /// 将后台档案官提取的增量状态、新人物与词条定向合入指定世界线与幕次，并维护后续快照一致性。
   ///
-  /// 严格维持 `history · chronicle · worldState` 三位一体时间点不变量。
-  void applyBackgroundExtraction(
+  /// 支持玩家在后台抽取返回前快节奏继续推演下一幕，绝不因 `history.length` 增长而静默丢弃档案。
+  bool applyBackgroundExtraction(
     SceneExtractionResult result, {
     bool godMode = false,
+    String? targetLineId,
+    int? targetChapterIndex,
   }) {
-    final target = line;
-    if (target.history.isEmpty) return;
+    WorldLine? target;
+    if (targetLineId != null && targetLineId.isNotEmpty) {
+      for (final l in slot.lines) {
+        if (l.id == targetLineId) {
+          target = l;
+          break;
+        }
+      }
+    } else {
+      target = line;
+    }
+    if (target == null || target.history.isEmpty) return false;
 
-    final lastIdx = target.history.length - 1;
-    final last = target.history[lastIdx];
+    final int targetIdx;
+    if (targetChapterIndex != null) {
+      targetIdx = target.history.indexWhere(
+        (n) => n.chapterIndex == targetChapterIndex,
+      );
+      if (targetIdx < 0) return false;
+    } else {
+      targetIdx = target.history.length - 1;
+    }
 
-    var mergedState = WorldStateService.merge(
-      target.worldState,
-      result.stateDelta,
-    );
-    if (godMode && (last.playerAction ?? '').trim().isNotEmpty) {
-      mergedState = _ensureGodModeFact(mergedState, last.playerAction!.trim());
+    final node = target.history[targetIdx];
+    final baseState = node.worldStateAfter ?? target.worldState;
+
+    var mergedAtNode = WorldStateService.merge(baseState, result.stateDelta);
+    final isGod = godMode || node.godMode;
+    if (isGod && (node.playerAction ?? '').trim().isNotEmpty) {
+      mergedAtNode = _ensureGodModeFact(mergedAtNode, node.playerAction!.trim());
     }
 
     final mergedGlossary = <GlossaryEntry>[
-      ...last.glossary,
+      ...node.glossary,
       for (final g in result.glossary)
-        if (!last.glossary.any((e) => e.term == g.term)) g,
+        if (!node.glossary.any((e) => e.term == g.term)) g,
     ];
     final mergedCast = <CastEntry>[
-      ...last.cast,
+      ...node.cast,
       for (final c in result.cast)
-        if (!last.cast.any((e) => e.name == c.name)) c,
+        if (!node.cast.any((e) => e.name == c.name)) c,
     ];
 
-    target.history[lastIdx] = last.copyWith(
-      date: last.date.trim().isEmpty && result.date.isNotEmpty
+    target.history[targetIdx] = node.copyWith(
+      date: node.date.trim().isEmpty && result.date.isNotEmpty
           ? result.date
-          : last.date,
+          : node.date,
       glossary: mergedGlossary,
       cast: mergedCast,
-      worldStateAfter: mergedState.copy(),
-      stateDiffSummary: result.diffSummary,
+      worldStateAfter: mergedAtNode.copy(),
+      stateDiffSummary: result.diffSummary.isNotEmpty
+          ? result.diffSummary
+          : node.stateDiffSummary,
     );
-    target.worldState = mergedState;
+
+    // 若玩家在后台抽取返回前已经推进到后续幕次，则把本幕新增的事实/事件/关系增量顺延补并到后续快照与当前 worldState，
+    // 既保留后续幕次已更新的时间、地点与新状态，也不丢失本幕晚到的档案增量。
+    final oldFacts = baseState.facts.toSet();
+    final oldEvents = baseState.events.toSet();
+    final addedFacts =
+        mergedAtNode.facts.where((f) => !oldFacts.contains(f)).toList();
+    final addedEvents =
+        mergedAtNode.events.where((e) => !oldEvents.contains(e)).toList();
+    final addedRelations = <String, String>{};
+    mergedAtNode.relations.forEach((k, v) {
+      if (baseState.relations[k] != v) addedRelations[k] = v;
+    });
+
+    var rolling = mergedAtNode.copy();
+    for (var i = targetIdx + 1; i < target.history.length; i++) {
+      final later = target.history[i];
+      final laterSnap = (later.worldStateAfter ?? rolling).copy();
+      if (laterSnap.time.trim().isEmpty && rolling.time.trim().isNotEmpty) {
+        laterSnap.time = rolling.time;
+      }
+      if (laterSnap.location.trim().isEmpty &&
+          rolling.location.trim().isNotEmpty) {
+        laterSnap.location = rolling.location;
+      }
+      for (final f in addedFacts) {
+        if (!laterSnap.facts.contains(f)) {
+          laterSnap.facts.add(f);
+        }
+      }
+      for (final e in addedEvents) {
+        if (!laterSnap.events.contains(e)) {
+          laterSnap.events.add(e);
+        }
+      }
+      addedRelations.forEach((k, v) {
+        laterSnap.relations.putIfAbsent(k, () => v);
+      });
+      var capped = WorldStateService.merge(laterSnap, WorldState());
+      if (later.godMode && (later.playerAction ?? '').trim().isNotEmpty) {
+        capped = _ensureGodModeFact(capped, later.playerAction!.trim());
+      }
+      rolling = capped;
+      target.history[i] = later.copyWith(worldStateAfter: rolling.copy());
+    }
+
+    target.worldState = rolling;
     target.updatedAt = DateTime.now();
+    return true;
   }
 
   static WorldState _ensureGodModeFact(WorldState state, String act) {
@@ -282,14 +352,26 @@ class GameSession {
     return node;
   }
 
-  void attachChronicle(String updated) {
-    final target = line;
+  bool attachChronicle(String updated, {String? targetLineId}) {
+    WorldLine? target;
+    if (targetLineId != null && targetLineId.isNotEmpty) {
+      for (final l in slot.lines) {
+        if (l.id == targetLineId) {
+          target = l;
+          break;
+        }
+      }
+    } else {
+      target = line;
+    }
+    if (target == null) return false;
     target.chronicle = updated;
     if (target.history.isNotEmpty) {
       target.history[target.history.length - 1] =
           target.history.last.copyWith(chronicleAfter: updated);
     }
     target.updatedAt = DateTime.now();
+    return true;
   }
 
   ChapterNode? popLastForReroll() {
