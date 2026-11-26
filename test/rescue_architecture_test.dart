@@ -213,9 +213,11 @@ void main() {
     tearDown(() async {
       SaveService.testStorageDirectory = null;
       SaveService.resetCacheForTest();
-      if (tempDir.existsSync()) {
-        await tempDir.delete(recursive: true);
-      }
+      try {
+        if (tempDir.existsSync()) {
+          await tempDir.delete(recursive: true);
+        }
+      } catch (_) {}
     });
 
     test('多槽位独立 JSON 文件读写、单槽更新与删除互不干扰', () async {

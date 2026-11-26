@@ -1,17 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:forui/forui.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../data/world_book_repository.dart';
 import '../../models/world_book.dart';
 import '../../services/file_export_service.dart';
+import '../themes/app_theme.dart';
 
-/// 世界书编辑器。
-///
-/// 所有字段都由用户填写 —— 应用不提供任何预设剧本。
+/// 世界书编辑器（`forui` 骨架：首屏聚焦核心 3 项，进阶 9 项收纳进 `FAccordion`）。
 class WorldBookEditorScreen extends StatefulWidget {
   final WorldBook book;
-
-  /// 是否为「AI 生成后的预览」—— 只是换个措辞，落库时机由调用方决定。
   final bool isPreview;
 
   const WorldBookEditorScreen({
@@ -101,6 +100,7 @@ class _WorldBookEditorScreenState extends State<WorldBookEditorScreen> {
       );
 
   Future<void> _save() async {
+    HapticFeedback.lightImpact();
     final book = _collect();
     await WorldBookRepository.upsert(book);
     if (!mounted) return;
@@ -142,143 +142,215 @@ class _WorldBookEditorScreenState extends State<WorldBookEditorScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final palette = AppTheme.readingOf(context);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('世界书'),
-        actions: <Widget>[
-          IconButton(
-            tooltip: '导出 JSON',
-            icon: const Icon(Icons.ios_share_rounded),
-            onPressed: _export,
+    return FScaffold(
+      childPad: false,
+      header: FHeader.nested(
+        title: Text(widget.isPreview ? '预览并确认世界书' : '编辑世界书'),
+        prefixes: <Widget>[
+          FHeaderAction.back(onPress: () => Navigator.of(context).maybePop()),
+        ],
+        suffixes: <Widget>[
+          FHeaderAction(
+            icon: const Icon(LucideIcons.share2, size: 18),
+            onPress: _export,
           ),
-          TextButton(
-            onPressed: _save,
-            child: Text(widget.isPreview ? '确认并保存' : '保存'),
+          FHeaderAction(
+            icon: Icon(LucideIcons.check, size: 19, color: palette.accent),
+            onPress: _save,
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 40),
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(18, 12, 18, 48),
         children: <Widget>[
-          _field(
-            _name,
-            '世界书名',
-            '例如：决胜西南1949',
-            required: true,
-          ),
-          _field(_era, '时代与跨度', '例如：1949年10月 - 1952年7月'),
-          _field(
-            _worldview,
-            '世界观与背景设定',
-            '时代背景、局势、主要矛盾、地理与制度环境……模型据此推演',
-            maxLines: 8,
-            required: true,
-          ),
-          _field(
-            _playerRole,
-            '你扮演的人物',
-            '身份、职务、年龄、性格、立场，例如「西南局第一书记，45岁」',
-            maxLines: 4,
-            required: true,
-          ),
-          _field(
-            _goal,
-            '玩家目标',
-            '这一局你想做什么、想验证什么。例如「尽量遵循历史，但允许自己的选择改变后续走向」',
-            maxLines: 3,
-          ),
-          _field(
-            _style,
-            '叙事文风',
-            '例如：白描为主，沉稳遒劲，多用军情电报与公文语气；或：冷峻谍战笔法',
-            maxLines: 3,
-          ),
-          _field(
-            _rules,
-            '世界规则与禁忌',
-            '你不希望出现的内容，或必须遵守的设定',
-            maxLines: 4,
-          ),
-          _field(
-            _characters,
-            '关键人物（选填）',
-            '一行一位：姓名 | 身份 | 立场。留空则由模型自行发挥',
-            maxLines: 5,
-          ),
-          _field(
-            _factions,
-            '关键势力（选填）',
-            '一行一方：名称 | 诉求 | 与主角的关系',
-            maxLines: 4,
-          ),
-          _field(
-            _locations,
-            '关键地点（选填）',
-            '一行一处：地名 | 意义',
-            maxLines: 4,
-          ),
-          _field(
-            _dimensions,
-            '状态维度模板（选填）',
-            '告诉模型每一幕的「当前世界状态」该盯住哪些维度。'
-                '留空则用通用五维：时间 / 地点 / 已知事实 / 人物关系 / 进行中事件',
-            maxLines: 3,
-          ),
-          _field(
-            _opening,
-            '开篇场景（选填）',
-            '留空则由模型根据世界观自动起笔',
-            maxLines: 5,
-          ),
-          _field(
-            _choices,
-            '开篇分支（选填，一行一条）',
-            '留空则第一幕的分支也由模型生成',
-            maxLines: 4,
-          ),
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.primary.withValues(alpha: 0.06),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: theme.dividerColor),
-            ),
-            child: Text(
-              '带 * 的是必填项。保存后回到首页新建推演即可开始。\n'
-              '世界书只保存在本机；导出 JSON 后可以分享给别人导入。',
-              style: TextStyle(
-                fontSize: 12,
-                height: 1.7,
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+          FCard(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Row(
+                    children: <Widget>[
+                      Icon(LucideIcons.bookOpen, size: 16, color: palette.accent),
+                      const SizedBox(width: 7),
+                      Text(
+                        '核心设定（填完即可开局）',
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w700,
+                          color: palette.ink,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  _singleField(_name, '世界书名 *', '例如：决胜西南1949'),
+                  _singleField(_era, '时代与跨度', '例如：1949年10月 - 1952年7月'),
+                  _multiField(
+                    _worldview,
+                    '世界观与背景设定 *',
+                    '时代背景、局势、主要矛盾、地理与制度环境……模型据此推演',
+                    minLines: 4,
+                    maxLines: 8,
+                  ),
+                  _multiField(
+                    _playerRole,
+                    '你扮演的人物 *',
+                    '身份、职务、年龄、性格、立场，例如「西南局第一书记，45岁」',
+                    minLines: 2,
+                    maxLines: 4,
+                    last: true,
+                  ),
+                ],
               ),
             ),
+          ),
+          const SizedBox(height: 14),
+          FCard(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+              child: FAccordion(
+                children: <FAccordionItemMixin>[
+                  FAccordionItem(
+                    title: const Text('叙事风格、目标与世界禁忌'),
+                    initiallyExpanded: widget.isPreview,
+                    child: Column(
+                      children: <Widget>[
+                        const SizedBox(height: 8),
+                        _multiField(
+                          _goal,
+                          '玩家目标',
+                          '这一局你想做什么、想验证什么',
+                          minLines: 2,
+                          maxLines: 3,
+                        ),
+                        _multiField(
+                          _style,
+                          '叙事文风',
+                          '例如：白描为主，沉稳遒劲，多用军情电报与公文语气',
+                          minLines: 2,
+                          maxLines: 3,
+                        ),
+                        _multiField(
+                          _rules,
+                          '世界规则与禁忌',
+                          '你不希望出现的内容，或必须遵守的设定',
+                          minLines: 2,
+                          maxLines: 4,
+                          last: true,
+                        ),
+                      ],
+                    ),
+                  ),
+                  FAccordionItem(
+                    title: const Text('关键人物、势力、地点与状态维度'),
+                    initiallyExpanded: widget.isPreview,
+                    child: Column(
+                      children: <Widget>[
+                        const SizedBox(height: 8),
+                        _multiField(
+                          _characters,
+                          '关键人物',
+                          '一行一位：姓名 | 身份 | 立场',
+                          minLines: 3,
+                          maxLines: 6,
+                        ),
+                        _multiField(
+                          _factions,
+                          '关键势力',
+                          '一行一方：名称 | 诉求 | 与主角的关系',
+                          minLines: 2,
+                          maxLines: 4,
+                        ),
+                        _multiField(
+                          _locations,
+                          '关键地点',
+                          '一行一处：地名 | 意义',
+                          minLines: 2,
+                          maxLines: 4,
+                        ),
+                        _multiField(
+                          _dimensions,
+                          '状态维度模板',
+                          '告诉后台档案官重点盯住哪些局势维度',
+                          minLines: 2,
+                          maxLines: 3,
+                          last: true,
+                        ),
+                      ],
+                    ),
+                  ),
+                  FAccordionItem(
+                    title: const Text('自定义开篇场景与初始分支'),
+                    initiallyExpanded: widget.isPreview,
+                    child: Column(
+                      children: <Widget>[
+                        const SizedBox(height: 8),
+                        _multiField(
+                          _opening,
+                          '开篇场景（留空则由模型自动起笔）',
+                          '第一幕开局文字',
+                          minLines: 3,
+                          maxLines: 6,
+                        ),
+                        _multiField(
+                          _choices,
+                          '开篇分支（一行一条）',
+                          '留空则第一幕分支也由模型生成',
+                          minLines: 2,
+                          maxLines: 4,
+                          last: true,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 18),
+          FButton(
+            prefix: const Icon(LucideIcons.check, size: 17),
+            onPress: _save,
+            child: Text(widget.isPreview ? '确认并保存世界书' : '保存修改'),
           ),
         ],
       ),
     );
   }
 
-  Widget _field(
+  Widget _singleField(
+    TextEditingController ctrl,
+    String label,
+    String hint,
+  ) =>
+      Padding(
+        padding: const EdgeInsets.only(bottom: 14),
+        child: FTextField(
+          control: FTextFieldControl.managed(controller: ctrl),
+          label: Text(label),
+          hint: hint,
+        ),
+      );
+
+  Widget _multiField(
     TextEditingController ctrl,
     String label,
     String hint, {
-    int maxLines = 2,
-    bool required = false,
+    int minLines = 2,
+    int maxLines = 4,
+    bool last = false,
   }) =>
       Padding(
-        padding: const EdgeInsets.only(bottom: 16),
-        child: TextField(
-          controller: ctrl,
+        padding: EdgeInsets.only(bottom: last ? 4 : 14),
+        child: FTextField.multiline(
+          control: FTextFieldControl.managed(controller: ctrl),
+          label: Text(label),
+          hint: hint,
+          minLines: minLines,
           maxLines: maxLines,
-          minLines: maxLines > 1 ? 2 : 1,
-          decoration: InputDecoration(
-            labelText: required ? '$label *' : label,
-            hintText: hint,
-            alignLabelWithHint: true,
-          ),
         ),
       );
 }

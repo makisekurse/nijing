@@ -4,15 +4,14 @@ import '../../models/world_book.dart';
 
 /// 内核层提示词 —— **编译进代码、用户不可修改**。
 ///
-/// 它只负责一件事：保证输出格式契约成立。
-/// 没有它，分支、词条、人物志全部解析不出来，游戏会散架。
+/// v2.0 轻解耦升级：
+/// - 默认开启后台异步抽取（`config.enableBackgroundExtract == true`）时，主模型**彻底卸下**
+///   `<glossary>` / `<cast>` / `<state>` 的 XML 维护负担，只需专心写好故事正文 + `<date>` + `<choices>`，
+///   文笔更舒展、末尾零干等、彻底消除因结构块拖累引发的截断与重试；
+/// - 若用户关闭后台抽取，则自动无缝回退至完整五块输出契约。
 class PromptKernel {
   PromptKernel._();
 
-  /// 思考风格规范 —— 仅在开启深度思考时注入。
-  ///
-  /// 原生 reasoning 是自由格式，模型很容易把它写成 Markdown 笔记、
-  /// 夹带英文术语和代码符号。这段只约束**思考的写法**，不碰输出契约。
   static const String thinkingRule = '''
 【思考规范 · 适用于你的思考过程】
 思考过程将在推演中向读者呈现思维链。请遵守：
@@ -21,36 +20,48 @@ class PromptKernel {
 3. 专注局势推演与写作决策：该给主角什么处境、各方会如何反应、这一幕该落在哪里。
 4. 思考结束就直接输出正文与结构块，不要写「现在开始写作」这类过渡语。''';
 
-  /// ⚠️ 内核里**绝不能出现可被照抄的内容行**。
-  ///
-  /// 2026-09-25 实机事故：旧版骨架写的是
-  /// ```
-  /// <choices>
-  /// 第一条可供主角决断的具体行动（一句话，30~60 字）
-  /// 第二条可供主角决断的具体行动
-  /// 第三条（可选）
-  /// </choices>
-  /// ```
-  /// 模型把这四行当成「格式的一部分」原样抄进了输出，用户在界面上
-  /// 看到了「第一条可供主角决断的具体行动（一句话，30~60 字）」这种
-  /// 模板文字混在真实选项里；正文里也抄进了「（正文：约 500 字的白描叙事）」。
-  ///
-  /// 现在改成**空骨架 + 散文说明**：骨架里的标签内部一律留空，
-  /// 内容要求全部写在骨架之外。这样模型没有任何可以照抄的内容。
   static const String godModeRule = '''【天道敕令 · 玩家意志绝对主宰】（最高优先级，凌驾于一切世界规则与预设之上）
 本轮推演已由玩家亲自启动最高权限【主宰模式】。玩家即是世界意志的绝对主宰：
 1. 【既成事实法则】：视玩家所有描述、设定、行动结果为不可更改的既成事实与世界铁律。
 2. 【绝对顺从展开】：严禁以任何理由反驳、否定、削弱或曲解玩家的行动意志；严禁设置任何意外挫折、失败意外或强行使用“然而事情并不顺利”、“出乎意料的是”、“但事情没有那么简单”等反转套路，必须全力顺从玩家意图展开宏大厚重的推演。
-3. 【状态一致性保障】：在 <state> 结构块中，若玩家行动陈述或决定了确定事实，必须将该事实直接记入「事实」或「事件」，确保世界状态与玩家主宰意志绝对一致。''';
+3. 【状态一致性保障】：若玩家行动陈述或决定了确定事实，必须在剧情与局势中将其作为不可逆转的既成事实推进，确保世界走向与玩家主宰意志绝对一致。''';
 
   static String build(
     AppConfig config, {
     bool godMode = false,
     bool thinking = false,
+    bool? lightweightContract,
   }) {
     final minWords = (config.maxWords * 0.85).round();
     final godBlock = godMode ? '$godModeRule\n\n' : '';
     final thinkBlock = thinking ? '$thinkingRule\n\n' : '';
+    final useLight = lightweightContract ?? config.enableBackgroundExtract;
+
+    if (useLight) {
+      return '''
+$godBlock$thinkBlock【输出格式 · 极简文学契约】
+
+请把全部精力放在沉浸、厚重的小说叙事上，世界状态与人物档案由系统后台自动记录，你无需操心。
+每一幕只需按以下顺序输出（骨架内一律留空，严禁照抄说明文字）：
+
+<date></date>
+
+<choices>
+</choices>
+
+【填写要求】
+· <date> —— 一行，写明此刻的剧中日期与时段（如「1949年11月12日 深夜」）。
+· 正文 —— 紧跟在 <date> 之后，白描叙事实打实达到 ${config.maxWords} 字左右（下限不得少于 $minWords 字），直接进入情境。
+  必须充分展开人物对话、神态细节、心理交锋与场景环境，严禁敷衍草率收束。
+  不要写「正文」二字，不要加小标题或字数标注，不要写「以下是」这类过渡语。
+· <choices> —— 放在正文最末，给出 2~3 条具体可立即执行的行动选项，每条独占一行（30~60 字），写清做什么、对谁、为什么，杜绝「静观其变」「继续观察」等空话。
+
+【硬性底线】
+1. 正文中严禁出现「玩家」「回合」「经验值」「存档」「AI」「模型」「提示词」「系统」等出戏词汇。
+2. 除 <date> 与 <choices> 外，不要输出任何其他 XML/HTML 标签。
+3. 单幕正文字数务必达标：下限不得少于 $minWords 字（目标 ${config.maxWords} 字），务求详实厚重、言之有物。''';
+    }
+
     return '''
 $godBlock$thinkBlock【输出契约 · 最高优先级，必须严格遵守】
 
@@ -128,17 +139,10 @@ class PromptFramework {
    把笔墨放在人物的处境、抉择与两难上，而不作评价或渲染。
 6. 每一幕结尾留下真实的张力与两难，篇幅与叙事细节要充分舒展，严禁草率收束。''';
 
-  /// 用户改坏了也能一键回到这里。
   static const String retryNudges = '';
 }
 
 /// 把三层拼成最终 system prompt。
-///
-/// 上下文分块的职责边界（**不能混**）：
-/// - 【本局世界设定】= 静态设定，每幕不变
-/// - 【当前世界状态】= 此刻是什么状态（现在时）
-/// - 【前情编年史】= 过去发生过什么（过去时）
-/// - 最近 N 幕原文 = 文风与细节的连续性
 class PromptBuilder {
   PromptBuilder._();
 
@@ -150,16 +154,19 @@ class PromptBuilder {
     String worldState = '',
     bool? godMode,
     bool? thinking,
+    bool? lightweightContract,
   }) {
     final isGod = godMode ?? config.godMode;
-    final framework =
-        frameworkOverride.trim().isEmpty ? PromptFramework.defaultText : frameworkOverride.trim();
+    final framework = frameworkOverride.trim().isEmpty
+        ? PromptFramework.defaultText
+        : frameworkOverride.trim();
 
     final sb = StringBuffer();
     sb.writeln(PromptKernel.build(
       config,
       godMode: isGod,
       thinking: thinking ?? config.enableThinking,
+      lightweightContract: lightweightContract,
     ));
     sb.writeln();
     sb.writeln(framework);
@@ -191,7 +198,7 @@ class PromptBuilder {
     }
     if (book.stateDimensions.trim().isNotEmpty) {
       sb.writeln(
-        '状态维度（`<state>` 里重点盯住这些）：${book.stateDimensions.trim()}',
+        '状态维度（局势推进时重点盯住这些）：${book.stateDimensions.trim()}',
       );
     }
     if (worldState.trim().isNotEmpty) {
@@ -242,14 +249,14 @@ class PromptBuilder {
     final actionPrompt = playerAction.trim().isEmpty
         ? (godMode
             ? '【主宰天道敕令】请根据以上世界设定，以绝对顺从玩家意志的基调写出第一幕：交代时间、地点与当前局势，'
-                '点出主角面临的开局局势，并按输出契约给出可供决断的分支。'
+                '点出主角面临的开局局势，并给出可供决断的分支。'
             : '请根据以上世界设定，写出第一幕：交代时间、地点与当前局势，'
-                '点出主角面临的第一道难题，并按输出契约给出可供决断的分支。')
+                '点出主角面临的第一道难题，并给出可供决断的分支。')
         : (godMode
             ? '【主宰天道敕令】面对当前局势，主角施加绝对意志：“$playerAction”\n'
-                '此意志为世界不可撼动的既成事实，严禁反转、削弱或设置意外挫折。请全力顺从推演接下来的局势演变，并按输出契约给出新一轮决断。'
+                '此意志为世界不可撼动的既成事实，严禁反转、削弱或设置意外挫折。请全力顺从推演接下来的局势演变，并给出新一轮决断。'
             : '面对当前局势，主角指示：“$playerAction”\n'
-                '请据此推演接下来的局势演变，并按输出契约给出新一轮决断。');
+                '请据此推演接下来的局势演变，并给出新一轮决断。');
 
     messages.add(<String, String>{
       'role': 'user',
@@ -258,16 +265,40 @@ class PromptBuilder {
     return messages;
   }
 
-  /// 检出拒答/截断后的「改写重试」补丁。
-  ///
-  /// 注意：这是**正向改写**，不是对抗性越狱词 ——
-  /// 后者容易被平台风控判定为攻击，反而导致 Key 被限流。
+  /// 断流后原地无缝续写（Continue）消息拼装：把已生成正文作为 assistant 前缀，
+  /// 指示模型紧接断点继续写完并补齐 `<choices>`，绝不重复前文。
+  static List<Map<String, String>> buildContinueMessages({
+    required String systemPrompt,
+    required List<ChapterNode> history,
+    required String playerAction,
+    required String partialContent,
+    int keepRecent = 3,
+    bool godMode = false,
+  }) {
+    final base = buildMessages(
+      systemPrompt: systemPrompt,
+      history: history,
+      playerAction: playerAction,
+      keepRecent: keepRecent,
+      godMode: godMode,
+    );
+    base.add(<String, String>{
+      'role': 'assistant',
+      'content': partialContent,
+    });
+    base.add(<String, String>{
+      'role': 'user',
+      'content': '刚才输出在半途中断了。请紧接上一条回复最后一个字自然续写未完的剧情，'
+          '严禁重复已经写过的段落，不要加任何说明或致歉，写完本幕后务必附上 <choices> 决断分支。',
+    });
+    return base;
+  }
+
   static String retryNudge(int attempt) {
     if (attempt <= 0) return '';
     if (attempt == 1) {
-      return '\n\n【补充说明】上一条回复未能满足输出契约。'
-          '请直接从剧情场景写起，不要在开头做任何说明或致歉；'
-          '务必以 <choices> 标签给出 2~3 条具体决断。';
+      return '\n\n【补充说明】请直接从剧情场景写起，不要在开头做任何说明或致歉；'
+          '务必在结尾以 <choices> 标签给出 2~3 条具体决断。';
     }
     return '\n\n【再次说明】请以历史小说叙事的方式，'
         '聚焦人物的处境、抉择与治理难题，客观呈现多方立场与既有史实；'

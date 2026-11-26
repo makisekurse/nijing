@@ -4,12 +4,7 @@ import '../models/world_book.dart';
 import 'llm_client.dart';
 import 'runtime_log.dart';
 
-/// 编年史滚动摘要（增量、禁思考、异步不阻塞版）。
-///
-/// 相比旧版修复了三个致命问题：
-/// 1. 改用 `LlmClient.complete`（禁用思考 + 剥离任何残余 `<think>`），不再把几千字思维链塞进编年史；
-/// 2. 改为真正的增量压缩：有已有编年史时只送最近 [compressEvery] 幕，不再每次全量重传第 1~N 幕；
-/// 3. 由 `GenerationController` 在落盘与刷新 UI 后**异步执行**，不再让第 5/10/15 幕卡死几十秒。
+/// 编年史滚动摘要（增量、禁思考、异步不阻塞、自动路由后台辅模型）。
 class ChronicleService {
   ChronicleService._();
 
@@ -41,10 +36,14 @@ class ChronicleService {
   }) async {
     if (history.isEmpty) return previousChronicle;
 
+    final auxConfig = config.resolveAuxConfig();
+    final effectiveWs = auxConfig.workspaceId.trim().isNotEmpty
+        ? auxConfig.workspaceId.trim()
+        : workspaceId;
+
     final llm = client ?? LlmClient();
     try {
       final hasPrev = previousChronicle.trim().isNotEmpty;
-      // 有已有编年史时只增量取最近 compressEvery 幕；首次压缩取全量（最多最近 10 幕防止超长）
       final sliceCount = hasPrev ? compressEvery : 10;
       final recent = history.length > sliceCount
           ? history.sublist(history.length - sliceCount)
@@ -83,10 +82,10 @@ class ChronicleService {
       ];
 
       final out = (await llm.complete(
-        config: config,
+        config: auxConfig,
         apiKey: apiKey,
         messages: messages,
-        workspaceId: workspaceId,
+        workspaceId: effectiveWs,
         maxTokens: 1024,
         temperature: 0.3,
       ))

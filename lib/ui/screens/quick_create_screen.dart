@@ -1,19 +1,23 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:forui/forui.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:provider/provider.dart';
 
 import '../../data/secure_store.dart';
 import '../../data/world_book_repository.dart';
 import '../../models/app_config.dart';
 import '../../models/world_book.dart';
 import '../../services/world_builder_service.dart';
+import '../../state/config_provider.dart';
+import '../themes/app_theme.dart';
 import 'worldbook_editor_screen.dart';
 
-/// 快速创建世界：一句自然语言 → AI 扩写成世界书 → 预览可编辑 → 才落库。
-///
-/// 失败不会卡住用户：一律提示并给「用空白模板手写」的退路。
+/// AI 一句话快速创建世界书（`forui` 骨架 + 分槽密钥读取）。
 class QuickCreateScreen extends StatefulWidget {
-  final AppConfig config;
+  final AppConfig? config;
 
-  const QuickCreateScreen({super.key, required this.config});
+  const QuickCreateScreen({super.key, this.config});
 
   @override
   State<QuickCreateScreen> createState() => _QuickCreateScreenState();
@@ -48,12 +52,21 @@ class _QuickCreateScreenState extends State<QuickCreateScreen> {
       _error = '';
     });
 
-    final apiKey = await SecureStore.readApiKey();
+    ConfigProvider? cfgProvider;
+    try {
+      cfgProvider = Provider.of<ConfigProvider>(context, listen: false);
+    } catch (_) {}
+
+    final cfg = cfgProvider?.config ?? widget.config ?? AppConfig();
+    final apiKey = cfgProvider != null
+        ? await cfgProvider.resolveActiveMainKey()
+        : await SecureStore.readMainKeyForConfig(cfg);
+
     final res = await WorldBuilderService.buildWithResult(
-      config: widget.config,
+      config: cfg,
       apiKey: apiKey,
       description: text,
-      workspaceId: widget.config.workspaceId,
+      workspaceId: cfg.workspaceId,
     );
 
     if (!mounted) return;
@@ -69,7 +82,6 @@ class _QuickCreateScreenState extends State<QuickCreateScreen> {
     await _previewAndSave(res.book!);
   }
 
-  /// 生成结果不直接落库 —— 先让用户过一眼、可编辑，确认后才保存。
   Future<void> _previewAndSave(WorldBook book) async {
     final saved = await Navigator.of(context).push<WorldBook>(
       MaterialPageRoute<WorldBook>(
@@ -101,40 +113,41 @@ class _QuickCreateScreenState extends State<QuickCreateScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final palette = AppTheme.readingOf(context);
+    final ladder = AppTheme.ladderOf(context);
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('创建世界')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 20, 20, 40),
+    return FScaffold(
+      childPad: false,
+      header: FHeader.nested(
+        title: const Text('快速创建世界'),
+        prefixes: <Widget>[
+          FHeaderAction.back(onPress: () => Navigator.of(context).maybePop()),
+        ],
+      ),
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 40),
         children: <Widget>[
           Text(
             '用一句话描述你想进入的世界',
             style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: theme.colorScheme.onSurface,
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: palette.ink,
+              fontFamilyFallback: AppTheme.serifFontFallback,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           Text(
-            '越具体越好：时代、地点、你是谁、想做什么。'
-            '生成后可以逐项修改，确认了才会保存。',
-            style: TextStyle(
-              fontSize: 12.5,
-              height: 1.7,
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-            ),
+            '越具体越好：时代、地点、你是谁、想做什么。AI 扩写完成后会先进入编辑器预览，由你确认再保存。',
+            style: TextStyle(fontSize: 13, height: 1.6, color: palette.muted),
           ),
           const SizedBox(height: 16),
-          TextField(
-            controller: _desc,
-            maxLines: 5,
-            minLines: 3,
+          FTextField.multiline(
+            control: FTextFieldControl.managed(controller: _desc),
             enabled: !_busy,
-            decoration: const InputDecoration(
-              hintText: '例如：我想在 1936 年的北平扮演一名记者，尽量遵循历史，但允许改变历史。',
-            ),
+            minLines: 4,
+            maxLines: 6,
+            hint: '例如：我想在 1936 年的北平扮演一名记者，尽量遵循历史，但允许改变历史。',
           ),
           const SizedBox(height: 12),
           Wrap(
@@ -142,60 +155,79 @@ class _QuickCreateScreenState extends State<QuickCreateScreen> {
             runSpacing: 8,
             children: _examples
                 .map(
-                  (e) => ActionChip(
-                    label: Text(
-                      e.length > 18 ? '${e.substring(0, 18)}…' : e,
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                    onPressed: _busy
+                  (e) => InkWell(
+                    borderRadius: BorderRadius.circular(10),
+                    onTap: _busy
                         ? null
-                        : () => setState(() => _desc.text = e),
+                        : () {
+                            HapticFeedback.selectionClick();
+                            setState(() => _desc.text = e);
+                          },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 11,
+                        vertical: 7,
+                      ),
+                      decoration: BoxDecoration(
+                        color: ladder.card,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: ladder.hairlineStrong,
+                          width: 0.8,
+                        ),
+                      ),
+                      child: Text(
+                        e.length > 20 ? '${e.substring(0, 20)}…' : e,
+                        style: TextStyle(fontSize: 12, color: palette.ink),
+                      ),
+                    ),
                   ),
                 )
                 .toList(),
           ),
           const SizedBox(height: 20),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              onPressed: _busy ? null : _generate,
-              icon: _busy
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.auto_awesome_rounded, size: 18),
-              label: Text(_busy ? '正在生成…' : '生成世界'),
-              style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 15),
-              ),
-            ),
+          FButton(
+            prefix: _busy
+                ? const SizedBox(
+                    width: 15,
+                    height: 15,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(LucideIcons.sparkles, size: 17),
+            onPress: _busy ? null : _generate,
+            child: Text(_busy ? '正在扩写世界书…' : '生成世界书'),
           ),
           const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            child: TextButton(
-              onPressed: _busy ? null : _blankTemplate,
-              child: const Text('不用 AI，我自己写'),
-            ),
+          FButton(
+            variant: FButtonVariant.ghost,
+            onPress: _busy ? null : _blankTemplate,
+            child: const Text('不用 AI，手动填写模板'),
           ),
           if (_error.isNotEmpty) ...<Widget>[
             const SizedBox(height: 16),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.primary.withValues(alpha: 0.07),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: theme.dividerColor),
-              ),
-              child: Text(
-                _error,
-                style: TextStyle(
-                  fontSize: 12.5,
-                  height: 1.65,
-                  color: theme.colorScheme.onSurface,
+            FCard(
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Icon(
+                      LucideIcons.circleAlert,
+                      size: 16,
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _error,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          height: 1.6,
+                          color: palette.ink,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),

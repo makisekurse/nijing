@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import '../core/app_error.dart';
 import '../models/app_config.dart';
 import 'providers.dart';
+import 'reasoning_dialect.dart';
 import 'runtime_log.dart';
 
 /// 流式分块类型：思考通道与正文通道从网络层开始**物理隔离**。
@@ -28,9 +29,6 @@ class LlmChunk {
 ///
 /// 仅作用于 `delta.content` 通道，用于兼容少数不提供独立 `reasoning_content` 字段、
 /// 而是把 `<think>...</think>` 直接混在 `content` 里吐出的第三方反代或本地模型（Ollama / vLLM）。
-///
-/// 对于原生提供 `reasoning_content` / `reasoning` 的标准 API，根本不经过此分流器，
-/// 从源头杜绝思考草稿泄漏进正文。
 class InlineThinkSplitter {
   bool _insideThink = false;
   String _openTagName = '';
@@ -63,7 +61,6 @@ class InlineThinkSplitter {
           data = data.substring(m.end);
           continue;
         }
-        // 保留尾部可能被跨帧截断的半截开标签（如 "<thi"）
         final p = _partialTail.firstMatch(data);
         if (p != null) {
           final safe = data.substring(0, p.start);
@@ -87,7 +84,6 @@ class InlineThinkSplitter {
           data = data.substring(m.end);
           continue;
         }
-        // 保留尾部可能被跨帧截断的半截闭标签（如 "</thi"）
         final p = _partialTail.firstMatch(data);
         if (p != null) {
           final safe = data.substring(0, p.start);
@@ -114,32 +110,38 @@ class InlineThinkSplitter {
   }
 }
 
-/// 统一的流式 / 非流式大模型客户端。
+/// 统一的流式 / 非流式大模型客户端（v2.0 架构升级）。
 ///
 /// 核心保障：
-/// 1. **原生双轨分流** —— `reasoning_content` 与 `content` 物理隔离为 [LlmChunk.thought] / [LlmChunk.content]；
-/// 2. **400 参数自愈** —— 若服务端拒绝 `enable_thinking` / `thinking_budget` 或 `max_tokens` 超限，自动降级参数重试一次；
-/// 3. **真报文透出** —— 识别 HTTP 非 200 与 SSE 流内嵌 `{"error": ...}`，绝不静默吞错；
-/// 4. **超时与可中止** —— 30s 连接超时 + 60s 流式静默超时 + `cancel()` 立即断连。
+/// 1. **原生双轨分流** —— `reasoning_content` / `reasoning` / `thought` 与 `content` 物理隔离；
+/// 2. **Kelivo 式流式重试铁律（`if (_yieldedAny) rethrow`）** —— 仅在 0 字节首帧前走退避重试，
+///    一旦已产出任何文字绝不静默重跑清屏，交由上层原地保留并支持「继续生成」；
+/// 3. **2026 统一推理方言** —— 自动适配百炼 Qwen4、DeepSeek V4（`thinking.type` + `reasoning_effort`）、
+///    OpenAI 与自定义中转，并带 400 参数自动剥离自愈；
+/// 4. **可立即打断的等待与流取消** —— `cancel()` 秒级断开底层连接与退避睡眠。
 class LlmClient {
   LlmClient({
-    this.connectTimeout = const Duration(seconds: 30),
-    this.idleTimeout = const Duration(seconds: 60),
+    this.connectTimeout = const Duration(seconds: 35),
+    this.idleTimeout = const Duration(seconds: 90),
   });
 
   final Duration connectTimeout;
   final Duration idleTimeout;
-  static const int _maxNetworkRetries = 1;
+  static const int _maxPreFirstTokenRetries = 2;
 
   http.Client? _client;
+  Completer<void>? _cancelSignal;
   bool _cancelled = false;
   bool _yieldedAny = false;
 
   bool get isCancelled => _cancelled;
 
-  /// 立刻中止当前请求。
+  /// 立刻中止当前请求与任何退避等待。
   void cancel() {
     _cancelled = true;
+    if (_cancelSignal != null && !_cancelSignal!.isCompleted) {
+      _cancelSignal!.complete();
+    }
     _client?.close();
     _client = null;
   }
@@ -147,6 +149,7 @@ class LlmClient {
   void reset() {
     _cancelled = false;
     _yieldedAny = false;
+    _cancelSignal = Completer<void>();
   }
 
   /// 是否允许空 Key（例如本地 Ollama / LM Studio / 局域网自建网关）。
@@ -161,8 +164,6 @@ class LlmClient {
   }
 
   /// 根据单幕目标字数与思考模式计算充裕的 `max_tokens`。
-  ///
-  /// 彻底解除旧版将 `qwen-plus` 锁死 2000、`deepseek` 锁死 4096 导致的半路断章缺陷。
   static int calculateMaxTokens(
     int maxWords, {
     String? modelName,
@@ -179,18 +180,20 @@ class LlmClient {
         final withBody = thinkingBudget + math.max(3072, maxWords * 3);
         return withBody.clamp(8192, 32768).toInt();
       }
-      if (model.contains('reasoner') || model.contains('-r1')) {
+      if (model.contains('reasoner') ||
+          model.contains('-r1') ||
+          model.contains('v4-pro') ||
+          model.startsWith('qwen4')) {
         return math.max(16384, maxWords * 4).clamp(16384, 32768).toInt();
       }
       return math.max(12288, maxWords * 4).clamp(12288, 16384).toInt();
     }
 
-    // 普通模式：确保 3000 字长幕 + 结构块绝不因 token 不足被腰斩
     final base = math.max(4096, maxWords * 3);
     return base.clamp(4096, 12288).toInt();
   }
 
-  /// 原生双轨流式生成：逐块 yield [LlmChunk]（思考与正文物理隔离）。
+  /// 原生双轨流式生成：逐块 yield [LlmChunk]。
   Stream<LlmChunk> streamChunks({
     required AppConfig config,
     required String apiKey,
@@ -214,6 +217,7 @@ class LlmClient {
 
     var attempt = 0;
     var stripThinkingParams = false;
+    var stripTemperature = false;
     int? overrideMaxTokens;
 
     while (true) {
@@ -224,32 +228,48 @@ class LlmClient {
           apiKey: apiKey,
           messages: messages,
           stripThinkingParams: stripThinkingParams,
+          stripTemperature: stripTemperature,
           overrideMaxTokens: overrideMaxTokens,
         );
         return;
       } on AppError catch (e) {
         if (_cancelled) rethrow;
 
-        // 智能 400 参数自愈：服务端拒绝思考扩展参数或 max_tokens 超限时，降级重试一次
-        if (e.kind == AppErrorKind.badRequest && !_yieldedAny) {
+        // 铁律：一旦已经向界面产出过任意文字，绝不在网络层重跑！
+        if (_yieldedAny) rethrow;
+
+        // 首帧前 400 参数自愈：自动降级不支持的思考参数 / temperature / max_tokens
+        if (e.kind == AppErrorKind.badRequest) {
           final detail = '${e.message} ${e.detail ?? ''}'.toLowerCase();
           if (!stripThinkingParams && _isThinkingParamError(detail)) {
             stripThinkingParams = true;
-            RuntimeLog.w('LLM', '服务端不支持思考扩展参数，自动移除后重试：${e.message}');
+            RuntimeLog.w('LLM', '服务端不支持思考扩展参数，自动剥离后重试：${e.message}');
+            continue;
+          }
+          if (!stripTemperature && _isTemperatureParamError(detail)) {
+            stripTemperature = true;
+            RuntimeLog.w('LLM', '服务端不接受 temperature 参数，自动剥离后重试');
             continue;
           }
           if (overrideMaxTokens == null && _isMaxTokensError(detail)) {
             overrideMaxTokens = _extractAllowedMaxTokens(detail) ?? 4096;
-            RuntimeLog.w('LLM', 'max_tokens 超出模型限制，自动降级至 $overrideMaxTokens 重试');
+            RuntimeLog.w('LLM', 'max_tokens 超限，自动降级至 $overrideMaxTokens 重试');
             continue;
           }
         }
 
-        final canRetry = e.retryable && !_yieldedAny && attempt < _maxNetworkRetries;
+        final canRetry = e.retryable && attempt < _maxPreFirstTokenRetries;
         if (!canRetry) rethrow;
         attempt++;
-        RuntimeLog.w('LLM', '首帧前遇到可重试错误（${e.kind.name}），退避重试第 $attempt 次');
-        await Future<void>.delayed(Duration(milliseconds: 800 * attempt));
+        final delay = Duration(milliseconds: 800 * (1 << (attempt - 1)));
+        RuntimeLog.w(
+          'LLM',
+          '首帧前遇到可重试错误（${e.kind.name}），${delay.inMilliseconds}ms 后退避重试第 $attempt 次',
+        );
+        await _interruptibleDelay(delay);
+        if (_cancelled) {
+          throw const AppError(AppErrorKind.cancelled, '已中止。');
+        }
       }
     }
   }
@@ -287,12 +307,26 @@ class LlmClient {
     }
   }
 
+  Future<void> _interruptibleDelay(Duration delay) async {
+    if (delay <= Duration.zero || _cancelled) return;
+    final sig = _cancelSignal;
+    if (sig != null) {
+      await Future.any<void>(<Future<void>>[
+        Future<void>.delayed(delay),
+        sig.future,
+      ]);
+      return;
+    }
+    await Future<void>.delayed(delay);
+  }
+
   Stream<LlmChunk> _singleStreamRequest({
     required String url,
     required AppConfig config,
     required String apiKey,
     required List<Map<String, String>> messages,
     required bool stripThinkingParams,
+    required bool stripTemperature,
     required int? overrideMaxTokens,
   }) async* {
     final model = Providers.resolveModelName(config);
@@ -321,28 +355,26 @@ class LlmClient {
       'max_tokens': maxTokens,
     };
 
-    // o1 / o3 / o4 等推理模型在部分端点不允许传 temperature
-    if (!RegExp(r'^o[134](?:-|$)').hasMatch(model.toLowerCase())) {
+    if (!stripTemperature &&
+        ReasoningDialectResolver.allowsTemperature(
+          modelName: model,
+          thinkingEnabled: config.enableThinking,
+        )) {
       body['temperature'] = cleanTemperature;
     }
 
-    if (!stripThinkingParams &&
-        Providers.supportsThinkingParameter(
-          apiProvider: config.apiProvider,
-          modelName: model,
-        )) {
-      body['enable_thinking'] = config.enableThinking;
-      if (config.enableThinking && config.thinkingBudget > 0) {
-        body['thinking_budget'] = config.thinkingBudget;
-      }
-    }
+    ReasoningDialectResolver.applyStreamingThinking(
+      body,
+      config: config,
+      modelName: model,
+      stripThinkingParams: stripThinkingParams,
+    );
 
     final totalInputChars =
         messages.fold<int>(0, (a, m) => a + (m['content']?.length ?? 0));
     RuntimeLog.i(
       'LLM',
-      'POST $url · model=$model · thinking=${body['enable_thinking'] ?? '默认'}'
-      '${body.containsKey('thinking_budget') ? '(budget=${body['thinking_budget']})' : ''} · '
+      'POST $url · model=$model · dialect=${ReasoningDialectResolver.resolve(config: config, modelName: model).name} · '
       'max_tokens=$maxTokens · msgs=${messages.length}/$totalInputChars字',
     );
 
@@ -418,9 +450,8 @@ class LlmClient {
           throw const AppError(AppErrorKind.cancelled, '已中止。');
         }
         final trimmed = line.trim();
-        if (trimmed.isEmpty) continue;
+        if (trimmed.isEmpty || trimmed.startsWith(':')) continue;
 
-        // 兼容部分中转站直接返回裸 JSON 错误体（非 SSE 包装，但 HTTP 200）
         if (trimmed.startsWith('{') && trimmed.contains('"error"')) {
           final msg = AppError.extractServerMessage(trimmed);
           if (msg.isNotEmpty) {
@@ -450,7 +481,6 @@ class LlmClient {
         }
         if (decoded is! Map) continue;
 
-        // 检测 SSE 内嵌 error 对象
         if (decoded['error'] != null) {
           final msg = AppError.extractServerMessage(payload);
           throw AppError(
@@ -524,7 +554,6 @@ class LlmClient {
   }
 
   /// 「测试连接」：发一个最小请求验证 Key / 端点 / 模型名是否可用。
-  /// 返回 null 表示成功，否则返回可读的错误原因。
   Future<String?> testConnection({
     required AppConfig config,
     required String apiKey,
@@ -548,13 +577,12 @@ class LlmClient {
         'stream': false,
         'max_tokens': 32,
       };
-      if (!stripThinking &&
-          Providers.supportsThinkingParameter(
-            apiProvider: config.apiProvider,
-            modelName: model,
-          )) {
-        body['enable_thinking'] = false;
-      }
+      ReasoningDialectResolver.applyDisableThinking(
+        body,
+        config: config,
+        modelName: model,
+        stripThinkingParams: stripThinking,
+      );
 
       final client = http.Client();
       try {
@@ -589,10 +617,7 @@ class LlmClient {
     return '连接失败，请检查接口配置。';
   }
 
-  /// 非流式补全（用于编年史压缩、AI 一句话创建世界书等结构化场景）。
-  ///
-  /// 自动关闭百炼思考开关，并剥离任何模型可能夹带的 `<think>...</think>`，
-  /// 确保返回纯净文本/JSON。
+  /// 非流式补全（用于后台状态抽取、编年史压缩、AI 一句话创建世界书等结构化场景）。
   Future<String> complete({
     required AppConfig config,
     required String apiKey,
@@ -614,25 +639,29 @@ class LlmClient {
     }
 
     var stripThinking = false;
+    var stripTemperature = false;
     var effectiveMaxTokens = maxTokens;
 
-    for (var attempt = 0; attempt < 2; attempt++) {
+    for (var attempt = 0; attempt < 3; attempt++) {
       final body = <String, dynamic>{
         'model': model,
         'messages': messages,
         'stream': false,
         'max_tokens': effectiveMaxTokens,
       };
-      if (!RegExp(r'^o[134](?:-|$)').hasMatch(model.toLowerCase())) {
+      if (!stripTemperature &&
+          ReasoningDialectResolver.allowsTemperature(
+            modelName: model,
+            thinkingEnabled: false,
+          )) {
         body['temperature'] = temperature;
       }
-      if (!stripThinking &&
-          Providers.supportsThinkingParameter(
-            apiProvider: config.apiProvider,
-            modelName: model,
-          )) {
-        body['enable_thinking'] = false;
-      }
+      ReasoningDialectResolver.applyDisableThinking(
+        body,
+        config: config,
+        modelName: model,
+        stripThinkingParams: stripThinking,
+      );
 
       final client = http.Client();
       try {
@@ -649,9 +678,13 @@ class LlmClient {
         final respBody = utf8.decode(resp.bodyBytes, allowMalformed: true);
         if (resp.statusCode != 200) {
           final lower = respBody.toLowerCase();
-          if (resp.statusCode == 400 && attempt == 0) {
+          if (resp.statusCode == 400 && attempt < 2) {
             if (!stripThinking && _isThinkingParamError(lower)) {
               stripThinking = true;
+              continue;
+            }
+            if (!stripTemperature && _isTemperatureParamError(lower)) {
+              stripTemperature = true;
               continue;
             }
             if (_isMaxTokensError(lower)) {
@@ -711,8 +744,17 @@ class LlmClient {
   static bool _isThinkingParamError(String lower) =>
       lower.contains('enable_thinking') ||
       lower.contains('thinking_budget') ||
+      lower.contains('reasoning_effort') ||
+      lower.contains('"thinking"') ||
+      lower.contains("'thinking'") ||
       lower.contains('extra_forbidden') ||
       lower.contains('unrecognized request argument');
+
+  static bool _isTemperatureParamError(String lower) =>
+      lower.contains('temperature') &&
+      (lower.contains('unsupported') ||
+          lower.contains('not allowed') ||
+          lower.contains('invalid'));
 
   static bool _isMaxTokensError(String lower) =>
       lower.contains('max_tokens') &&
@@ -723,7 +765,6 @@ class LlmClient {
           lower.contains('exceed'));
 
   static int? _extractAllowedMaxTokens(String lower) {
-    // 匹配形如 "[1, 8192]"、"<= 4096"、"maximum is 4096"
     final rangeMatch = RegExp(r'\[\s*\d+\s*,\s*(\d+)\s*\]').firstMatch(lower);
     if (rangeMatch != null) {
       return int.tryParse(rangeMatch.group(1) ?? '');

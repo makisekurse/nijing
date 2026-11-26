@@ -2,18 +2,19 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:forui/forui.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:provider/provider.dart';
 
 import '../../core/app_info.dart';
-import '../../data/prefs_store.dart';
-import '../../data/secure_store.dart';
-import '../../data/world_book_repository.dart';
 import '../../models/app_config.dart';
 import '../../models/save_slot.dart';
 import '../../models/world_book.dart';
 import '../../services/file_export_service.dart';
-import '../../services/game_session.dart';
-import '../../services/generation_controller.dart';
 import '../../services/save_service.dart';
+import '../../state/config_provider.dart';
+import '../../state/library_provider.dart';
+import '../themes/app_theme.dart';
 import 'about_screen.dart';
 import 'continue_tab.dart';
 import 'profile_tab.dart';
@@ -23,20 +24,16 @@ import 'settings_screen.dart';
 import 'worldbook_editor_screen.dart';
 import 'worlds_tab.dart';
 
-/// 主壳：世界 · 继续 · 我的。
-///
-/// 用户脑子里的三件事：
-/// - 世界 = 我创造什么
-/// - 继续 = 我正在经历什么
-/// - 我的 = App 设置
+/// 主壳：世界 · 继续 · 我的（v2.0 瘦身重构：`forui` `FScaffold` + `FBottomNavigationBar` + `Provider` 状态解耦）。
 class HomeShell extends StatefulWidget {
-  final AppConfig config;
-  final ValueChanged<AppConfig> onConfigChanged;
+  /// 保留可选构造参数以兼容历史测试或直接挂载；生产环境直接由 [ConfigProvider] 驱动。
+  final AppConfig? config;
+  final ValueChanged<AppConfig>? onConfigChanged;
 
   const HomeShell({
     super.key,
-    required this.config,
-    required this.onConfigChanged,
+    this.config,
+    this.onConfigChanged,
   });
 
   @override
@@ -44,242 +41,97 @@ class HomeShell extends StatefulWidget {
 }
 
 class _HomeShellState extends State<HomeShell> {
-  static const String _kActiveSlot = 'nijing_active_slot';
+  int _index = 1; // 默认落在「继续」
 
-  int _index = 1; // 默认落在「继续」：用户最想做的事是接着玩
+  LibraryProvider get _lib => context.read<LibraryProvider>();
+  ConfigProvider get _cfg => context.read<ConfigProvider>();
 
-  List<SaveSlot> _slots = <SaveSlot>[];
-  List<WorldBook> _books = <WorldBook>[];
-  /// 回滚前自动生成的备份。**不计入推演数量**。
-  List<SaveSlot> _backups = <SaveSlot>[];
-  String? _activeSlotId;
-  bool _loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _reload();
-  }
-
-  Future<void> _reload() async {
-    final slots = await SaveService.loadAll();
-    final books = await WorldBookRepository.loadAll();
-    final backups = await SaveService.loadBackups();
-    final active = await PrefsStore.getString(_kActiveSlot);
-    if (!mounted) return;
-    setState(() {
-      _slots = slots;
-      _books = books;
-      _backups = backups;
-      _activeSlotId = active;
-      _loading = false;
-    });
-  }
-
-  Future<void> _setActiveSlot(String id) async {
-    _activeSlotId = id;
-    await PrefsStore.setString(_kActiveSlot, id);
-  }
-
-  // ---------- 进入世界 ----------
-  //
-  // ⚠️ 2026-09-25 修：以前每次「进入这个世界」都无条件 SaveSlot.newId() 建新槽，
-  // 于是两件事同时坏掉：
-  //   1. 「最近推演」每进一次就多一条（同一本书反复出现）
-  //   2. 「继续进入」可能开到一个只到第一幕的旧槽 —— 用户看到的就是「跳回第一幕」
-  //
-  // 现在改成**一本书一局**：进入时先找这本书已有的存档，有就接着玩，
-  // 没有才新建。想重开走「重新开始一局」（会清空当前进度，带确认）。
-
-  /// 这本书已有的存档（最近的、非备份）。
-  SaveSlot? _slotForBook(String bookId) {
-    for (final s in _slots) {
-      if (s.worldBook.id == bookId) return s;
-    }
-    return null;
-  }
-
-  /// 每本书的进度，给世界列表显示「继续 · 第 N 幕」用。
-  Map<String, int> get _progressByBook => <String, int>{
-        for (final s in _slots) s.worldBook.id: s.chapterCount,
-      };
-
-  /// 全部推演加起来有多少条世界线。
-  int get _lineCount =>
-      _slots.fold(0, (sum, s) => sum + s.lines.length);
+  // ---------- 进入推演 ----------
 
   Future<void> _startSessionWith(WorldBook book) async {
-    final existing = _slotForBook(book.id);
-    if (existing != null) {
-      await _openReader(existing);
-      return;
-    }
-    await _createSession(book);
-  }
-
-  /// 新建一局（不检查是否已有存档）。
-  Future<void> _createSession(WorldBook book) async {
-    final slot = SaveSlot(
-      id: SaveSlot.newId(),
-      title: book.name,
-      worldBook: book,
-    );
-
-    // ⚠️ 走 GameSession.seedOpening，**不要在这里直接造 ChapterNode** ——
-    // 那样会漏掉每幕快照（chronicleAfter / worldStateAfter），
-    // 导致从第一幕分岔时状态退不回去。
-    if (book.openingScene.trim().isNotEmpty) {
-      GameSession(slot).seedOpening(
-        content: book.openingScene.trim(),
-        date: book.era.trim(),
-        choices: book.openingChoices,
-      );
-    }
-
-    await SaveService.upsert(slot);
-    await _setActiveSlot(slot.id);
-    await _reload();
+    final slot = await _lib.ensureSlotForBook(book);
     if (!mounted) return;
     await _openReader(slot);
   }
 
-  /// 重新开始一局。
-  ///
-  /// **清空已有存档的进度，而不是再建一个新槽** —— 再建新槽的话
-  /// 「最近推演」又会多出一条，正是之前那个 bug。
   Future<void> _restartBook(WorldBook book, {bool confirm = true}) async {
-    final existing = _slotForBook(book.id);
-    if (existing == null) {
-      await _createSession(book);
-      return;
-    }
-
-    if (confirm) {
+    final existing = _lib.slotForBook(book.id);
+    if (existing != null && confirm) {
       final ok = await _confirm(
-        '重新开始《${book.name}》？\n'
-        '当前进度（第 ${existing.chapterCount} 幕）'
-        '${existing.lines.length > 1 ? '与全部 ${existing.lines.length} 条世界线' : ''}'
-        '会被清空，无法恢复。',
+        title: '重新开始《${book.name}》？',
+        message: '当前进度（第 ${existing.chapterCount} 幕）'
+            '${existing.lines.length > 1 ? '与全部 ${existing.lines.length} 条世界线' : ''}'
+            '会被清空，无法恢复。',
+        destructive: true,
+        confirmLabel: '清空并重开',
       );
       if (!ok) return;
     }
-
-    // 重开 = 整槽重置成一条全新的主线，且必须先销毁旧的 GenerationController 缓存！
-    // 否则打开 ReaderScreen 时会直接把清空前的旧 session 从内存里复活回来。
-    GenerationController.disposeSlot(existing.id);
-    final fresh = SaveSlot(
-      id: existing.id,
-      title: book.name,
-      worldBook: book,
-      createdAt: existing.createdAt,
-    );
-    if (book.openingScene.trim().isNotEmpty) {
-      GameSession(fresh).seedOpening(
-        content: book.openingScene.trim(),
-        date: book.era.trim(),
-        choices: book.openingChoices,
-      );
-    }
-    await SaveService.upsert(fresh);
-    await _setActiveSlot(fresh.id);
-    await _reload();
+    final fresh = await _lib.restartBook(book);
     if (!mounted) return;
     await _openReader(fresh);
   }
 
   Future<void> _newSession() async {
-    if (_books.isEmpty) {
-      _toast('还没有世界。先创建或导入一个，才能进入。');
+    final books = _lib.books;
+    if (books.isEmpty) {
+      _toast('还没有世界。先创建、导入或一键加载示例世界书吧。');
       setState(() => _index = 0);
       return;
     }
-    final playable = _books.where((b) => b.isPlayable).toList();
+    final playable = books.where((b) => b.isPlayable).toList();
     if (playable.isEmpty) {
-      _toast('现有的世界书还缺必填项，先补全一个。');
+      _toast('现有的世界书还缺必填项，请先补全。');
       setState(() => _index = 0);
       return;
     }
 
-    final book = await showModalBottomSheet<WorldBook>(
-      context: context,
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      showDragHandle: true,
-      isScrollControlled: true,
-      useSafeArea: true,
-      builder: (ctx) => SafeArea(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(ctx).size.height * 0.85,
-          ),
-          child: ListView(
-            shrinkWrap: true,
-            physics: const ClampingScrollPhysics(),
-            children: <Widget>[
-              const Padding(
-                padding: EdgeInsets.fromLTRB(20, 0, 20, 10),
-                child: Text('选择要进入的世界', style: TextStyle(fontSize: 14)),
+    final book = await _showSheet<WorldBook>(
+      title: '选择要进入的世界',
+      child: FTileGroup(
+        children: <FTileMixin>[
+          for (final b in playable)
+            FTile(
+              prefix: const Icon(LucideIcons.bookOpen, size: 17),
+              title: Text(b.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+              subtitle: Text(
+                _lib.slotForBook(b.id) == null
+                    ? (b.era.trim().isEmpty ? '尚未开始' : b.era.trim())
+                    : '已有进度 · 第 ${_lib.slotForBook(b.id)!.chapterCount} 幕',
               ),
-              for (final b in playable)
-                ListTile(
-                  title: Text(b.name, style: const TextStyle(fontSize: 14.5)),
-                  subtitle: Text(
-                    _slotForBook(b.id) == null
-                        ? (b.era.trim().isEmpty ? '还没开始' : b.era)
-                        : '已有进度 · 第 ${_slotForBook(b.id)!.chapterCount} 幕',
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                  onTap: () => Navigator.pop(ctx, b),
-                ),
-            ],
-          ),
-        ),
+              suffix: const Icon(LucideIcons.chevronRight, size: 16),
+              onPress: () => Navigator.pop(context, b),
+            ),
+        ],
       ),
     );
     if (book == null || !mounted) return;
 
-    final existing = _slotForBook(book.id);
+    final existing = _lib.slotForBook(book.id);
     if (existing == null) {
-      await _createSession(book);
+      final slot = await _lib.createSession(book);
+      if (!mounted) return;
+      await _openReader(slot);
       return;
     }
 
-    // 这本书已经有一局了 —— 让用户明确选，不要默默新建一条
-    final choice = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      showDragHandle: true,
-      isScrollControlled: true,
-      useSafeArea: true,
-      builder: (ctx) => SafeArea(
-        child: SingleChildScrollView(
-          physics: const ClampingScrollPhysics(),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    '《${book.name}》已经有一局了',
-                    style: const TextStyle(fontSize: 14),
-                  ),
-                ),
-              ),
-              ListTile(
-                leading: const Icon(Icons.play_arrow_rounded),
-                title: Text('继续 · 第 ${existing.chapterCount} 幕'),
-                onTap: () => Navigator.pop(ctx, 'resume'),
-              ),
-              ListTile(
-                leading: const Icon(Icons.restart_alt_rounded),
-                title: const Text('重新开始一局'),
-                subtitle: const Text('当前进度会被清空'),
-                onTap: () => Navigator.pop(ctx, 'restart'),
-              ),
-            ],
+    final choice = await _showSheet<String>(
+      title: '《${book.name}》已有进行中的一局',
+      child: FTileGroup(
+        children: <FTileMixin>[
+          FTile(
+            prefix: const Icon(LucideIcons.play, size: 17),
+            title: Text('继续 · 第 ${existing.chapterCount} 幕'),
+            onPress: () => Navigator.pop(context, 'resume'),
           ),
-        ),
+          FTile(
+            variant: FItemVariant.destructive,
+            prefix: const Icon(LucideIcons.rotateCcw, size: 17),
+            title: const Text('重新开始一局'),
+            subtitle: const Text('当前进度会被清空'),
+            onPress: () => Navigator.pop(context, 'restart'),
+          ),
+        ],
       ),
     );
     if (choice == null || !mounted) return;
@@ -291,18 +143,18 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   Future<void> _openReader(SaveSlot slot) async {
-    await _setActiveSlot(slot.id);
+    await _lib.setActiveSlot(slot.id);
     if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => ReaderScreen(
-          config: widget.config,
           slot: slot,
-          onConfigChanged: widget.onConfigChanged,
+          config: _cfg.config,
+          onConfigChanged: (c) => _cfg.updateConfig(c, immediate: true),
         ),
       ),
     );
-    await _reload();
+    await _lib.reload();
   }
 
   // ---------- 世界书 ----------
@@ -313,39 +165,37 @@ class _HomeShellState extends State<HomeShell> {
         builder: (_) => WorldBookEditorScreen(book: book),
       ),
     );
-    await _reload();
+    await _lib.reload();
     return saved;
   }
 
   Future<void> _createBook() async {
-    final theme = Theme.of(context);
-    final choice = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: theme.scaffoldBackgroundColor,
-      showDragHandle: true,
-      isScrollControlled: true,
-      useSafeArea: true,
-      builder: (ctx) => SafeArea(
-        child: SingleChildScrollView(
-          physics: const ClampingScrollPhysics(),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              ListTile(
-                leading: const Icon(Icons.auto_awesome_rounded),
-                title: const Text('快速创建'),
-                subtitle: const Text('一句话描述，AI 扩写成完整设定（生成后可改）'),
-                onTap: () => Navigator.pop(ctx, 'quick'),
-              ),
-              ListTile(
-                leading: const Icon(Icons.edit_note_rounded),
-                title: const Text('手动编写'),
-                subtitle: const Text('从空白模板开始，逐项自己填'),
-                onTap: () => Navigator.pop(ctx, 'blank'),
-              ),
-            ],
+    final choice = await _showSheet<String>(
+      title: '创建世界书',
+      child: FTileGroup(
+        children: <FTileMixin>[
+          FTile(
+            prefix: const Icon(LucideIcons.sparkles, size: 17),
+            title: const Text('AI 一句话快速创建'),
+            subtitle: const Text('用一句自然语言由模型扩写成完整设定（先预览后保存）'),
+            suffix: const Icon(LucideIcons.chevronRight, size: 16),
+            onPress: () => Navigator.pop(context, 'quick'),
           ),
-        ),
+          FTile(
+            prefix: const Icon(LucideIcons.penLine, size: 17),
+            title: const Text('手动编写'),
+            subtitle: const Text('填写核心三项即可开局，进阶设定按需展开'),
+            suffix: const Icon(LucideIcons.chevronRight, size: 16),
+            onPress: () => Navigator.pop(context, 'blank'),
+          ),
+          FTile(
+            prefix: const Icon(LucideIcons.bookmarkPlus, size: 17),
+            title: const Text('一键导入示例《决胜西南1949》'),
+            subtitle: const Text('完整历史正剧世界书与开篇，立刻体验引擎能力'),
+            suffix: const Icon(LucideIcons.chevronRight, size: 16),
+            onPress: () => Navigator.pop(context, 'sample'),
+          ),
+        ],
       ),
     );
     if (choice == null || !mounted) return;
@@ -353,246 +203,156 @@ class _HomeShellState extends State<HomeShell> {
     if (choice == 'quick') {
       await Navigator.of(context).push<WorldBook>(
         MaterialPageRoute<WorldBook>(
-          builder: (_) => QuickCreateScreen(config: widget.config),
+          builder: (_) => QuickCreateScreen(config: _cfg.config),
         ),
       );
-      await _reload();
+      await _lib.reload();
       return;
     }
-
-    // ⚠️ **不预先落库** —— 编辑器里点保存时才写。
-    // 以前先 upsert 再打开编辑器，用户退出来就留下一本空白世界书，
-    // 反复几次「世界书数目」就对不上了。
-    final book = WorldBook.blank();
-    if (!mounted) return;
-    await _editBook(book);
+    if (choice == 'sample') {
+      await _importSample();
+      return;
+    }
+    await _editBook(WorldBook.blank());
   }
 
-  /// 空白世界书：既没写背景也没写角色，等于创建后没填就退出了。
-  List<WorldBook> get _blankBooks => _books
-      .where((b) => b.worldview.trim().isEmpty && b.playerRole.trim().isEmpty)
-      .toList();
-
-  Future<void> _purgeBlankBooks() async {
-    final blanks = _blankBooks;
-    if (blanks.isEmpty) {
-      _toast('没有空白世界书。');
-      return;
+  Future<void> _importSample() async {
+    try {
+      final book = await _lib.importSampleWorldBook();
+      if (!mounted) return;
+      _toast('已导入示例《${book.name}》，可以直接开始推演');
+    } catch (e) {
+      if (mounted) _toast('导入示例失败：$e');
     }
-    final ok = await _confirm(
-      '删除 ${blanks.length} 本空白世界书？\n'
-      '${blanks.map((b) => '· ${b.name}').take(8).join('\n')}'
-      '${blanks.length > 8 ? '\n…' : ''}\n\n'
-      '这些是创建后没填内容就退出的，删掉不影响任何推演。',
-    );
-    if (!ok) return;
-    for (final b in blanks) {
-      await WorldBookRepository.delete(b.id);
-    }
-    await _reload();
-    if (mounted) _toast('已清理 ${blanks.length} 本空白世界书');
   }
 
   Future<void> _importBook() async {
-    final ctrl = TextEditingController();
-    final text = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.only(
-          left: 20,
-          right: 20,
-          bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
-        ),
-        child: SingleChildScrollView(
-          physics: const BouncingScrollPhysics(
-            parent: AlwaysScrollableScrollPhysics(),
+    final mode = await _showSheet<String>(
+      title: '导入世界书',
+      child: FTileGroup(
+        children: <FTileMixin>[
+          FTile(
+            prefix: const Icon(LucideIcons.fileUp, size: 17),
+            title: const Text('从本地文件选择（.json / .txt）'),
+            subtitle: const Text('直接打开手机文件管理器导入'),
+            suffix: const Icon(LucideIcons.chevronRight, size: 16),
+            onPress: () => Navigator.pop(context, 'file'),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-            const Text('导入世界书', style: TextStyle(fontSize: 14)),
-            const SizedBox(height: 6),
-            Text(
-              '粘贴世界书的 JSON，或直接粘贴一段世界观提示词文本。',
-              style: TextStyle(
-                fontSize: 12,
-                height: 1.6,
-                color:
-                    Theme.of(ctx).colorScheme.onSurface.withValues(alpha: 0.6),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: ctrl,
-              maxLines: 8,
-              minLines: 5,
-              decoration: const InputDecoration(
-                hintText: '{"name":"…","worldview":"…","playerRole":"…"}',
-              ),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: <Widget>[
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () async {
-                      final data = await Clipboard.getData('text/plain');
-                      ctrl.text = data?.text ?? '';
-                    },
-                    icon: const Icon(Icons.content_paste_rounded, size: 18),
-                    label: const Text('读剪贴板'),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: FilledButton(
-                    onPressed: () => Navigator.pop(ctx, ctrl.text),
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                    child: const Text('导入'),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
+          FTile(
+            prefix: const Icon(LucideIcons.clipboardPaste, size: 17),
+            title: const Text('粘贴 JSON 或世界观文本'),
+            subtitle: const Text('从剪贴板或手动粘贴导入'),
+            suffix: const Icon(LucideIcons.chevronRight, size: 16),
+            onPress: () => Navigator.pop(context, 'paste'),
+          ),
+          FTile(
+            prefix: const Icon(LucideIcons.bookmarkPlus, size: 17),
+            title: const Text('一键导入示例《决胜西南1949》'),
+            suffix: const Icon(LucideIcons.chevronRight, size: 16),
+            onPress: () => Navigator.pop(context, 'sample'),
+          ),
+        ],
       ),
-    ),
     );
-    ctrl.dispose();
-    if (text == null || text.trim().isEmpty) return;
+    if (mode == null || !mounted) return;
 
+    if (mode == 'sample') {
+      await _importSample();
+      return;
+    }
+
+    String? rawText;
+    if (mode == 'file') {
+      try {
+        rawText = await _lib.pickLocalTextFile();
+      } catch (e) {
+        if (mounted) _toast('读取文件失败：$e');
+        return;
+      }
+    } else {
+      rawText = await _showPasteDialog(
+        title: '粘贴世界书内容',
+        hint: '{"name":"…","worldview":"…","playerRole":"…"} 或纯文本世界观',
+      );
+    }
+
+    if (rawText == null || rawText.trim().isEmpty || !mounted) return;
     try {
-      final book = WorldBook.fromImportText(text);
-      await WorldBookRepository.upsert(book);
-      await _reload();
+      final book = await _lib.importBookFromText(rawText);
       if (!mounted) return;
       _toast('已导入《${book.name}》');
       await _editBook(book);
     } catch (e) {
-      if (!mounted) return;
-      _toast('导入失败：$e');
+      if (mounted) _toast('导入失败：$e');
     }
   }
 
   Future<void> _bookMenu(WorldBook book) async {
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      showDragHandle: true,
-      isScrollControlled: true,
-      useSafeArea: true,
-      builder: (ctx) => SafeArea(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(ctx).size.height * 0.85,
+    final slot = _lib.slotForBook(book.id);
+    await _showSheet<void>(
+      title: book.name,
+      child: FTileGroup(
+        children: <FTileMixin>[
+          FTile(
+            prefix: const Icon(LucideIcons.play, size: 17),
+            title: const Text('进入这个世界'),
+            enabled: book.isPlayable,
+            onPress: () {
+              Navigator.pop(context);
+              _startSessionWith(book);
+            },
           ),
-          child: SingleChildScrollView(
-            physics: const ClampingScrollPhysics(),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                ListTile(
-                  leading: const Icon(Icons.play_arrow_rounded),
-                  title: const Text('进入这个世界'),
-                  enabled: book.isPlayable,
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _startSessionWith(book);
-                  },
-                ),
-                if (_slotForBook(book.id) != null)
-                  ListTile(
-                    leading: const Icon(Icons.restart_alt_rounded),
-                    title: const Text('重新开始一局'),
-                    subtitle: Text(
-                      '当前进度第 ${_slotForBook(book.id)!.chapterCount} 幕，会被清空',
-                    ),
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      _restartBook(book);
-                    },
-                  ),
-                ListTile(
-                  leading: const Icon(Icons.edit_rounded),
-                  title: const Text('编辑'),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _editBook(book);
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.file_present_rounded),
-                  title: const Text('导出世界书文件（JSON）'),
-                  subtitle: const Text('保存至下载目录，可直接传输、备份与分享'),
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    final json = book.exportToJson();
-                    final ts = FileExportService.formatTimestamp();
-                    final safeName =
-                        FileExportService.sanitizeFileName(book.name);
-                    final fileName = '拟境_世界书_${safeName}_$ts.json';
-                    final res = await FileExportService.exportFile(
-                      fileName: fileName,
-                      content: json,
-                      mimeType: 'application/json',
-                    );
-                    await Clipboard.setData(ClipboardData(text: json));
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        duration: const Duration(seconds: 6),
-                        content: Text(
-                          res.success
-                              ? '世界书已保存至：${res.path}\n（已同时复制到剪贴板）'
-                              : '保存失败：${res.message}（已复制到剪贴板）',
-                        ),
-                        action: SnackBarAction(
-                          label: '系统分享',
-                          onPressed: () => FileExportService.shareText(
-                            title: '世界书 · ${book.name}',
-                            text: json,
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.copy_rounded),
-                  title: const Text('复制世界书 JSON 到剪贴板'),
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    await Clipboard.setData(
-                      ClipboardData(text: book.exportToJson()),
-                    );
-                    if (mounted) _toast('已复制到剪贴板');
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.delete_outline_rounded),
-                  title: const Text('删除'),
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    final ok = await _confirm('删除世界书《${book.name}》？');
-                    if (!ok) return;
-                    await WorldBookRepository.delete(book.id);
-                    await _reload();
-                  },
-                ),
-                const SizedBox(height: 12),
-              ],
+          if (slot != null)
+            FTile(
+              prefix: const Icon(LucideIcons.rotateCcw, size: 17),
+              title: const Text('重新开始一局'),
+              subtitle: Text('清空当前第 ${slot.chapterCount} 幕进度'),
+              onPress: () {
+                Navigator.pop(context);
+                _restartBook(book);
+              },
             ),
+          FTile(
+            prefix: const Icon(LucideIcons.pencil, size: 17),
+            title: const Text('编辑世界书'),
+            onPress: () {
+              Navigator.pop(context);
+              _editBook(book);
+            },
           ),
-        ),
+          FTile(
+            prefix: const Icon(LucideIcons.share2, size: 17),
+            title: const Text('导出 JSON 文件'),
+            subtitle: const Text('保存至下载目录并同步复制到剪贴板'),
+            onPress: () async {
+              Navigator.pop(context);
+              final json = book.exportToJson();
+              final ts = FileExportService.formatTimestamp();
+              final safe = FileExportService.sanitizeFileName(book.name);
+              await _exportAndNotify(
+                fileName: '拟境_世界书_${safe}_$ts.json',
+                content: json,
+                shareTitle: '世界书 · ${book.name}',
+                okLabel: '世界书已导出',
+              );
+            },
+          ),
+          FTile(
+            variant: FItemVariant.destructive,
+            prefix: const Icon(LucideIcons.trash2, size: 17),
+            title: const Text('删除世界书'),
+            onPress: () async {
+              Navigator.pop(context);
+              final ok = await _confirm(
+                title: '删除世界书',
+                message: '确定删除《${book.name}》？已有推演存档不受影响。',
+                destructive: true,
+              );
+              if (!ok) return;
+              await _lib.deleteBook(book.id);
+            },
+          ),
+        ],
       ),
     );
   }
@@ -600,379 +360,430 @@ class _HomeShellState extends State<HomeShell> {
   // ---------- 存档 ----------
 
   Future<void> _slotMenu(SaveSlot slot) async {
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      showDragHandle: true,
-      isScrollControlled: true,
-      useSafeArea: true,
-      builder: (ctx) => SafeArea(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(ctx).size.height * 0.85,
+    await _showSheet<void>(
+      title: slot.title,
+      child: FTileGroup(
+        children: <FTileMixin>[
+          FTile(
+            prefix: const Icon(LucideIcons.share2, size: 17),
+            title: const Text('导出推演存档（JSON）'),
+            subtitle: const Text('包含全部世界线与历史幕次'),
+            onPress: () async {
+              Navigator.pop(context);
+              final json = SaveService.exportSlot(slot);
+              final ts = FileExportService.formatTimestamp();
+              final safe = FileExportService.sanitizeFileName(slot.title);
+              await _exportAndNotify(
+                fileName: '拟境_推演存档_${safe}_$ts.json',
+                content: json,
+                shareTitle: '推演存档 · ${slot.title}',
+                okLabel: '推演存档已导出',
+              );
+            },
           ),
-          child: SingleChildScrollView(
-            physics: const ClampingScrollPhysics(),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                ListTile(
-                  leading: const Icon(Icons.file_present_rounded),
-                  title: const Text('导出推演存档文件（JSON）'),
-                  subtitle: const Text('保存至下载目录，包含全部世界线与历史幕次'),
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    final json = SaveService.exportSlot(slot);
-                    final ts = FileExportService.formatTimestamp();
-                    final safeTitle =
-                        FileExportService.sanitizeFileName(slot.title);
-                    final fileName = '拟境_推演存档_${safeTitle}_$ts.json';
-                    final res = await FileExportService.exportFile(
-                      fileName: fileName,
-                      content: json,
-                      mimeType: 'application/json',
-                    );
-                    await Clipboard.setData(ClipboardData(text: json));
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        duration: const Duration(seconds: 6),
-                        content: Text(
-                          res.success
-                              ? '存档已保存至：${res.path}\n（已同时复制到剪贴板）'
-                              : '保存失败：${res.message}（已复制到剪贴板）',
-                        ),
-                        action: SnackBarAction(
-                          label: '系统分享',
-                          onPressed: () => FileExportService.shareText(
-                            title: '推演存档 · ${slot.title}',
-                            text: json,
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.copy_rounded),
-                  title: const Text('复制存档 JSON 到剪贴板'),
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    await Clipboard.setData(
-                      ClipboardData(text: SaveService.exportSlot(slot)),
-                    );
-                    if (mounted) _toast('存档 JSON 已复制到剪贴板');
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.delete_outline_rounded),
-                  title: const Text('删除这一局'),
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    final ok = await _confirm('删除《${slot.title}》这一局？');
-                    if (!ok) return;
-                    GenerationController.disposeSlot(slot.id);
-                    await SaveService.delete(slot.id);
-                    if (_activeSlotId == slot.id) {
-                      await PrefsStore.remove(_kActiveSlot);
-                      _activeSlotId = null;
-                    }
-                    await _reload();
-                  },
-                ),
-                const SizedBox(height: 12),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ---------- 数据管理 ----------
-
-  Future<void> _dataManage() async {
-    final theme = Theme.of(context);
-    final muted = theme.colorScheme.onSurface.withValues(alpha: 0.6);
-
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: theme.scaffoldBackgroundColor,
-      showDragHandle: true,
-      isScrollControlled: true,
-      useSafeArea: true,
-      builder: (ctx) => SafeArea(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(ctx).size.height * 0.85,
-          ),
-          child: SingleChildScrollView(
-            physics: const ClampingScrollPhysics(),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Text(
-                        '本机数据',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: theme.colorScheme.onSurface,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      // 数量分开列 —— 回滚备份不是「推演」，
-                      // 混在一起会让用户以为凭空多出了几局。
-                      Text(
-                        '世界书 ${_books.length} 本 · 推演 ${_slots.length} 个'
-                        '${_lineCount > _slots.length ? ' · 世界线 $_lineCount 条' : ''}',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: theme.colorScheme.onSurface,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        <String>[
-                          if (_blankBooks.isNotEmpty)
-                            '${_blankBooks.length} 本世界书是空白的（创建后没填内容就退出）',
-                          if (_backups.isNotEmpty)
-                            '${_backups.length} 份回滚备份（回滚前自动生成，不计入推演）',
-                          if (_blankBooks.isEmpty && _backups.isEmpty)
-                            '世界书与存档只保存在本机，不会上传。',
-                        ].join('\n'),
-                        style: TextStyle(
-                            fontSize: 11.5, height: 1.6, color: muted),
-                      ),
-                    ],
-                  ),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.file_present_rounded),
-                  title: const Text('导出全部世界书为文件（JSON）'),
-                  subtitle: Text('共 ${_books.length} 本，保存为单个文件至下载目录'),
-                  enabled: _books.isNotEmpty,
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    final jsonContent = const JsonEncoder.withIndent('  ')
-                        .convert(_books.map((b) => b.toJson()).toList());
-                    final ts = FileExportService.formatTimestamp();
-                    final fileName = '拟境_全部世界书_${_books.length}本_$ts.json';
-                    final res = await FileExportService.exportFile(
-                      fileName: fileName,
-                      content: jsonContent,
-                      mimeType: 'application/json',
-                    );
-                    await Clipboard.setData(ClipboardData(text: jsonContent));
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        duration: const Duration(seconds: 6),
-                        content: Text(
-                          res.success
-                              ? '全部世界书已保存至：${res.path}\n（已同时复制 ${_books.length} 本到剪贴板）'
-                              : '保存失败：${res.message}（已复制到剪贴板）',
-                        ),
-                        action: SnackBarAction(
-                          label: '系统分享',
-                          onPressed: () => FileExportService.shareText(
-                            title: '拟境 · 全部世界书导出',
-                            text: jsonContent,
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.file_present_rounded),
-                  title: const Text('导出全部推演存档为文件（JSON）'),
-                  subtitle: Text('共 ${_slots.length} 个存档，保存为单个文件至下载目录'),
-                  enabled: _slots.isNotEmpty,
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    final jsonContent = const JsonEncoder.withIndent('  ')
-                        .convert(_slots.map((s) => s.toJson()).toList());
-                    final ts = FileExportService.formatTimestamp();
-                    final fileName = '拟境_全部推演存档_${_slots.length}个_$ts.json';
-                    final res = await FileExportService.exportFile(
-                      fileName: fileName,
-                      content: jsonContent,
-                      mimeType: 'application/json',
-                    );
-                    await Clipboard.setData(ClipboardData(text: jsonContent));
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        duration: const Duration(seconds: 6),
-                        content: Text(
-                          res.success
-                              ? '全部推演存档已保存至：${res.path}\n（已同时复制 ${_slots.length} 个存档到剪贴板）'
-                              : '保存失败：${res.message}（已复制到剪贴板）',
-                        ),
-                        action: SnackBarAction(
-                          label: '系统分享',
-                          onPressed: () => FileExportService.shareText(
-                            title: '拟境 · 全部推演存档导出',
-                            text: jsonContent,
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.copy_rounded),
-                  title: const Text('复制全部世界书到剪贴板'),
-                  enabled: _books.isNotEmpty,
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    final all = _books
-                        .map((b) => b.exportToJson())
-                        .join('\n\n=====\n\n');
-                    await Clipboard.setData(ClipboardData(text: all));
-                    if (mounted) _toast('已复制 ${_books.length} 本世界书');
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.copy_rounded),
-                  title: const Text('复制全部推演存档到剪贴板'),
-                  enabled: _slots.isNotEmpty,
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    final all = _slots
-                        .map((s) => SaveService.exportSlot(s))
-                        .join('\n\n=====\n\n');
-                    await Clipboard.setData(ClipboardData(text: all));
-                    if (mounted) _toast('已复制 ${_slots.length} 个推演存档');
-                  },
-                ),
-                if (_blankBooks.isNotEmpty)
-                  ListTile(
-                    leading: const Icon(Icons.cleaning_services_outlined),
-                    title: const Text('清理空白世界书'),
-                    subtitle: Text('删除 ${_blankBooks.length} 本没填过内容的世界书'),
-                    onTap: () async {
-                      Navigator.pop(ctx);
-                      await _purgeBlankBooks();
-                    },
-                  ),
-                if (_backups.isNotEmpty)
-                  ListTile(
-                    leading: const Icon(Icons.cleaning_services_outlined),
-                    title: const Text('清理回滚备份'),
-                    subtitle: Text('删除 ${_backups.length} 份自动备份，不影响推演进度'),
-                    onTap: () async {
-                      Navigator.pop(ctx);
-                      final ok = await _confirm(
-                        '删除 ${_backups.length} 份回滚备份？'
-                        '推演进度不受影响，但之后无法再回到回滚前的分支。',
-                      );
-                      if (!ok) return;
-                      final remaining =
-                          (await SaveService.loadAll(includeBackups: true))
-                              .where((s) => !s.isBackup)
-                              .toList();
-                      await SaveService.saveAll(remaining);
-                      await _reload();
-                      if (mounted) _toast('已清理回滚备份');
-                    },
-                  ),
-                ListTile(
-                  leading: const Icon(Icons.delete_sweep_outlined),
-                  title: const Text('清空全部数据'),
-                  subtitle: const Text('世界书、存档、备份、API Key 全部删除，不可恢复'),
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    final ok = await _confirm(
-                      '确定清空全部数据？世界书、存档、备份与 API Key 都会被删除，无法恢复。',
-                    );
-                    if (!ok) return;
-                    GenerationController.resetAll();
-                    await SaveService.saveAll(<SaveSlot>[]);
-                    await WorldBookRepository.saveAll(<WorldBook>[]);
-                    await SecureStore.clearApiKey();
-                    await PrefsStore.remove(_kActiveSlot);
-                    await PrefsStore.remove('nijing_workspace_id');
-                    await _reload();
-                    if (mounted) _toast('已清空全部本地数据与 API Key');
-                  },
-                ),
-                const SizedBox(height: 12),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<bool> _confirm(String message) async {
-    final r = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        content: Text(message, style: const TextStyle(fontSize: 14)),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('确定'),
+          FTile(
+            variant: FItemVariant.destructive,
+            prefix: const Icon(LucideIcons.trash2, size: 17),
+            title: const Text('删除这一局'),
+            onPress: () async {
+              Navigator.pop(context);
+              final ok = await _confirm(
+                title: '删除推演',
+                message: '确定删除《${slot.title}》这一局的全部世界线进度？不可恢复。',
+                destructive: true,
+              );
+              if (!ok) return;
+              await _lib.deleteSlot(slot.id);
+            },
           ),
         ],
       ),
     );
-    return r ?? false;
+  }
+
+  // ---------- 本机数据管理 ----------
+
+  Future<void> _dataManage() async {
+    final lib = _lib;
+    final palette = AppTheme.readingOf(context);
+    await _showSheet<void>(
+      title: '本机数据管理',
+      subtitle: '世界书 ${lib.books.length} 本 · 推演 ${lib.slots.length} 个'
+          '${lib.totalLineCount > lib.slots.length ? ' · 世界线 ${lib.totalLineCount} 条' : ''}',
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          FTileGroup(
+            children: <FTileMixin>[
+              FTile(
+                prefix: const Icon(LucideIcons.fileUp, size: 17),
+                title: const Text('从文件导入推演存档（.json）'),
+                onPress: () async {
+                  Navigator.pop(context);
+                  try {
+                    final text = await _lib.pickLocalTextFile();
+                    if (text == null || text.trim().isEmpty || !mounted) return;
+                    final slot = await _lib.importSaveFromText(text);
+                    if (mounted) _toast('已导入存档《${slot.title}》');
+                  } catch (e) {
+                    if (mounted) _toast('导入存档失败：$e');
+                  }
+                },
+              ),
+              FTile(
+                prefix: const Icon(LucideIcons.download, size: 17),
+                title: const Text('导出全部世界书（JSON）'),
+                subtitle: Text('共 ${lib.books.length} 本'),
+                enabled: lib.books.isNotEmpty,
+                onPress: () async {
+                  Navigator.pop(context);
+                  final jsonContent = const JsonEncoder.withIndent('  ')
+                      .convert(lib.books.map((b) => b.toJson()).toList());
+                  final ts = FileExportService.formatTimestamp();
+                  await _exportAndNotify(
+                    fileName: '拟境_全部世界书_${lib.books.length}本_$ts.json',
+                    content: jsonContent,
+                    shareTitle: '拟境 · 全部世界书',
+                    okLabel: '全部世界书已导出',
+                  );
+                },
+              ),
+              FTile(
+                prefix: const Icon(LucideIcons.download, size: 17),
+                title: const Text('导出全部推演存档（JSON）'),
+                subtitle: Text('共 ${lib.slots.length} 个'),
+                enabled: lib.slots.isNotEmpty,
+                onPress: () async {
+                  Navigator.pop(context);
+                  final jsonContent = const JsonEncoder.withIndent('  ')
+                      .convert(lib.slots.map((s) => s.toJson()).toList());
+                  final ts = FileExportService.formatTimestamp();
+                  await _exportAndNotify(
+                    fileName: '拟境_全部推演存档_${lib.slots.length}个_$ts.json',
+                    content: jsonContent,
+                    shareTitle: '拟境 · 全部推演存档',
+                    okLabel: '全部推演存档已导出',
+                  );
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          FTileGroup(
+            children: <FTileMixin>[
+              if (lib.blankBooks.isNotEmpty)
+                FTile(
+                  prefix: Icon(LucideIcons.eraser, size: 17, color: palette.accent),
+                  title: const Text('清理空白世界书'),
+                  subtitle: Text('删除 ${lib.blankBooks.length} 本未填写的世界书'),
+                  onPress: () async {
+                    Navigator.pop(context);
+                    final n = await _lib.purgeBlankBooks();
+                    if (mounted) _toast('已清理 $n 本空白世界书');
+                  },
+                ),
+              if (lib.backups.isNotEmpty)
+                FTile(
+                  prefix: Icon(LucideIcons.archive, size: 17, color: palette.accent),
+                  title: const Text('清理旧版回滚备份'),
+                  subtitle: Text('删除 ${lib.backups.length} 份旧备份'),
+                  onPress: () async {
+                    Navigator.pop(context);
+                    await _lib.purgeBackups();
+                    if (mounted) _toast('已清理回滚备份');
+                  },
+                ),
+              FTile(
+                variant: FItemVariant.destructive,
+                prefix: const Icon(LucideIcons.trash2, size: 17),
+                title: const Text('清空全部本机数据与密钥'),
+                subtitle: const Text('世界书、存档与全部加密 API Key 一并清除'),
+                onPress: () async {
+                  Navigator.pop(context);
+                  final ok = await _confirm(
+                    title: '清空全部数据',
+                    message: '确定清空全部世界书、存档、备份以及所有服务商的加密 API Key？此操作不可恢复。',
+                    destructive: true,
+                    confirmLabel: '全部清空',
+                  );
+                  if (!ok) return;
+                  await _lib.clearAllData();
+                  if (mounted) _toast('已清空全部本地数据与加密密钥');
+                },
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---------- 公共弹窗与提示工具 ----------
+
+  Future<T?> _showSheet<T>({
+    required String title,
+    String? subtitle,
+    required Widget child,
+  }) {
+    final palette = AppTheme.readingOf(context);
+    return showFSheet<T>(
+      context: context,
+      side: FLayout.btt,
+      mainAxisMaxRatio: 0.85,
+      builder: (ctx) => Container(
+        decoration: BoxDecoration(
+          color: palette.page,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          border: Border(top: BorderSide(color: palette.rule, width: 0.8)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(18, 12, 18, 22),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Center(
+                  child: Container(
+                    width: 36,
+                    height: 4,
+                    margin: const EdgeInsets.only(bottom: 14),
+                    decoration: BoxDecoration(
+                      color: palette.muted.withValues(alpha: 0.35),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: palette.ink,
+                  ),
+                ),
+                if (subtitle != null && subtitle.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    style: TextStyle(fontSize: 12.5, color: palette.muted),
+                  ),
+                ],
+                const SizedBox(height: 14),
+                child,
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<String?> _showPasteDialog({
+    required String title,
+    required String hint,
+  }) async {
+    final ctrl = TextEditingController();
+    final res = await showFDialog<String>(
+      context: context,
+      builder: (ctx, style, anim) => FDialog(
+        animation: anim,
+        style: style,
+        builder: (c, s) => Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text(title, style: s.titleTextStyle),
+              const SizedBox(height: 12),
+              FTextField.multiline(
+                control: FTextFieldControl.managed(controller: ctrl),
+                hint: hint,
+                minLines: 4,
+                maxLines: 8,
+              ),
+              const SizedBox(height: 14),
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: FButton(
+                      variant: FButtonVariant.outline,
+                      size: FButtonSizeVariant.sm,
+                      prefix: const Icon(LucideIcons.clipboardPaste, size: 15),
+                      onPress: () async {
+                        final data = await Clipboard.getData('text/plain');
+                        ctrl.text = data?.text ?? '';
+                      },
+                      child: const Text('读剪贴板'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: FButton(
+                      size: FButtonSizeVariant.sm,
+                      onPress: () => Navigator.pop(c, ctrl.text),
+                      child: const Text('导入'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    ctrl.dispose();
+    return res;
+  }
+
+  Future<bool> _confirm({
+    required String title,
+    required String message,
+    bool destructive = false,
+    String confirmLabel = '确定',
+  }) async {
+    final ok = await showFDialog<bool>(
+      context: context,
+      builder: (ctx, style, anim) => FDialog(
+        animation: anim,
+        style: style,
+        builder: (c, s) => Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text(title, style: s.titleTextStyle),
+              const SizedBox(height: 10),
+              Text(message, style: s.bodyTextStyle),
+              const SizedBox(height: 18),
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: FButton(
+                      variant: FButtonVariant.outline,
+                      size: FButtonSizeVariant.sm,
+                      onPress: () => Navigator.pop(c, false),
+                      child: const Text('取消'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: FButton(
+                      variant: destructive
+                          ? FButtonVariant.destructive
+                          : FButtonVariant.primary,
+                      size: FButtonSizeVariant.sm,
+                      onPress: () => Navigator.pop(c, true),
+                      child: Text(confirmLabel),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    return ok ?? false;
+  }
+
+  Future<void> _exportAndNotify({
+    required String fileName,
+    required String content,
+    required String shareTitle,
+    required String okLabel,
+  }) async {
+    final res = await FileExportService.exportFile(
+      fileName: fileName,
+      content: content,
+      mimeType: 'application/json',
+    );
+    await Clipboard.setData(ClipboardData(text: content));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 6),
+        content: Text(
+          res.success
+              ? '$okLabel：${res.path}\n（已同时复制到剪贴板）'
+              : '保存失败：${res.message}（已复制到剪贴板）',
+        ),
+        action: SnackBarAction(
+          label: '系统分享',
+          onPressed: () => FileExportService.shareText(
+            title: shareTitle,
+            text: content,
+          ),
+        ),
+      ),
+    );
   }
 
   void _toast(String msg) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  // ---------- 界面 ----------
-
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final lib = context.watch<LibraryProvider>();
 
-    return Scaffold(
-      body: SafeArea(
-        child: _loading
+    return FScaffold(
+      childPad: false,
+      footer: FBottomNavigationBar(
+        index: _index,
+        safeAreaBottom: true,
+        onChange: (i) {
+          HapticFeedback.selectionClick();
+          setState(() => _index = i);
+        },
+        children: const <Widget>[
+          FBottomNavigationBarItem(
+            icon: Icon(LucideIcons.library, size: 20),
+            label: Text('世界'),
+          ),
+          FBottomNavigationBarItem(
+            icon: Icon(LucideIcons.bookOpen, size: 20),
+            label: Text('继续'),
+          ),
+          FBottomNavigationBarItem(
+            icon: Icon(LucideIcons.user, size: 20),
+            label: Text('我的'),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        bottom: false,
+        child: lib.loading
             ? const Center(child: CircularProgressIndicator())
             : IndexedStack(
                 index: _index,
                 children: <Widget>[
                   WorldsTab(
-                    books: _books,
-                    progressByBook: _progressByBook,
+                    books: lib.books,
+                    progressByBook: lib.progressByBook,
                     onCreate: _createBook,
                     onImport: _importBook,
+                    onImportSample: _importSample,
                     onEdit: _editBook,
                     onMenu: _bookMenu,
                     onStartSession: _startSessionWith,
                   ),
                   ContinueTab(
-                    slots: _slots,
-                    activeSlotId: _activeSlotId,
+                    slots: lib.slots,
+                    activeSlotId: lib.activeSlotId,
                     onOpen: _openReader,
                     onMenu: _slotMenu,
                     onNewSession: _newSession,
+                    onImportSample: _importSample,
                   ),
                   ProfileTab(
                     onOpenSection: (section) => Navigator.of(context).push(
                       MaterialPageRoute<void>(
-                        builder: (_) => SettingsScreen(
-                          config: widget.config,
-                          onConfigChanged: widget.onConfigChanged,
-                          section: section,
-                        ),
+                        builder: (_) => SettingsScreen(section: section),
                       ),
                     ),
                     onOpenAbout: () => Navigator.of(context).push(
@@ -982,34 +793,11 @@ class _HomeShellState extends State<HomeShell> {
                     ),
                     onDataManage: _dataManage,
                     versionLabel: AppInfo.versionLabel,
-                    worldCountLabel: '${_books.length} 本世界书',
-                    slotCountLabel: '${_slots.length} 个推演',
+                    worldCountLabel: '${lib.books.length} 本世界书',
+                    slotCountLabel: '${lib.slots.length} 个推演',
                   ),
                 ],
               ),
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
-        backgroundColor: theme.scaffoldBackgroundColor,
-        indicatorColor: theme.colorScheme.primary.withValues(alpha: 0.14),
-        destinations: const <NavigationDestination>[
-          NavigationDestination(
-            icon: Icon(Icons.public_outlined),
-            selectedIcon: Icon(Icons.public),
-            label: '世界',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.auto_stories_outlined),
-            selectedIcon: Icon(Icons.auto_stories),
-            label: '继续',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline_rounded),
-            selectedIcon: Icon(Icons.person_rounded),
-            label: '我的',
-          ),
-        ],
       ),
     );
   }

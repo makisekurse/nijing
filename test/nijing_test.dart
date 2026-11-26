@@ -2,7 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:forui/forui.dart';
 import 'package:nijing/ui/screens/reader_screen.dart';
+import 'package:nijing/ui/themes/app_theme.dart';
 import 'package:nijing/models/annotation.dart';
 import 'package:nijing/models/app_config.dart';
 import 'package:nijing/models/chapter_node.dart';
@@ -1840,22 +1842,29 @@ final x = 1;
       expect(c3.slotId, 'slot_beta');
     });
 
-    test('状态机初始为 idle，cancel 和 reset 正常工作', () {
+    test('状态机初始为 idle，cancel（区分有无正文）和 reset 正常工作', () {
       final c = GenerationController.forSlot('slot_test');
       expect(c.status, GenerationStatus.idle);
       expect(c.isBusy, isFalse);
 
-      c.live = '流式中...';
+      // 无正文时中止直接回到 idle
       c.pendingAction = '拔刀迎敌';
       c.cancel();
-
       expect(c.status, GenerationStatus.idle);
       expect(c.isBusy, isFalse);
       expect(c.live, isEmpty);
       expect(c.notice, contains('已中止本次推演'));
       expect(c.noticeSticky, isTrue);
 
+      // 已有正文时中止进入 interrupted 保留现场，不白白抹除正文
+      c.live = '流式中已经吐出的小说正文……';
+      c.cancel();
+      expect(c.status, GenerationStatus.interrupted);
+      expect(c.hasLiveBody, isTrue);
+
       c.reset();
+      expect(c.status, GenerationStatus.idle);
+      expect(c.live, isEmpty);
       expect(c.notice, isEmpty);
       expect(c.noticeSticky, isFalse);
     });
@@ -2134,8 +2143,8 @@ final x = 1;
     });
   });
 
-  group('v1.3.4 · FallbackService 兜底顺序与通知保障', () {
-    test('三级兜底时 restart 先于 notice 发送，确保错误提示与降级通知不被抹除', () async {
+  group('v1.3.4 · FallbackService 失败直出与拒绝伪造降级幕', () {
+    test('模型持续拒绝或不可用时明确发射 failed，严禁落盘虚假本地降级章节', () async {
       final mock = _MockAlwaysFailClient();
       final fb = FallbackService(mock);
       final events = await fb.generate(
@@ -2148,17 +2157,10 @@ final x = 1;
 
       expect(events, isNotEmpty);
       final kinds = events.map((e) => e.kind).toList();
-      expect(kinds, contains(GenEventKind.restart));
-      expect(kinds, contains(GenEventKind.notice));
-      expect(kinds, contains(GenEventKind.done));
-
-      // 检查倒数第三个是 restart，倒数第二个是 notice，最后一个是 done(degraded: true)
-      final lastThree = events.sublist(events.length - 3);
-      expect(lastThree[0].kind, GenEventKind.restart);
-      expect(lastThree[1].kind, GenEventKind.notice);
-      expect(lastThree[1].text, contains('更换模型或服务商'));
-      expect(lastThree[2].kind, GenEventKind.done);
-      expect(lastThree[2].degraded, isTrue);
+      expect(kinds, isNot(contains(GenEventKind.done)));
+      expect(kinds, contains(GenEventKind.failed));
+      final failedEv = events.firstWhere((e) => e.kind == GenEventKind.failed);
+      expect(failedEv.text, isNotEmpty);
     });
   });
 
@@ -2381,6 +2383,13 @@ final x = 1;
 
       await tester.pumpWidget(
         MaterialApp(
+          theme: AppTheme.mirage,
+          localizationsDelegates: FLocalizations.localizationsDelegates,
+          supportedLocales: FLocalizations.supportedLocales,
+          builder: (context, child) => FTheme(
+            data: AppTheme.getForuiTheme('mirage'),
+            child: child ?? const SizedBox.shrink(),
+          ),
           home: ReaderScreen(
             config: AppConfig(),
             slot: slot,
@@ -2540,7 +2549,7 @@ final x = 1;
         expect(body1Closed, '残阳如血，塞外狂风席卷着黄沙。');
       });
 
-      test('FallbackService · 网络中断残文抢救 (Salvage)：含 date 且正文 >= 200 字时直接结算并补齐选项',
+      test('FallbackService · 网络中断零清屏保护：已有正文时发 interrupted 原地保留现场',
           () async {
         final mockClient = _MockNetworkInterruptWithPartialChapterClient();
         final fallback = FallbackService(mockClient);
@@ -2560,13 +2569,16 @@ final x = 1;
           playerAction: '推门而入',
         ).toList();
 
-        final doneEvents =
-            events.where((e) => e.kind == GenEventKind.done).toList();
-        expect(doneEvents.length, 1);
-        final chapter = doneEvents.first.chapter!;
-        expect(chapter.body.length, greaterThanOrEqualTo(200));
-        expect(chapter.date, '建中元年冬');
-        expect(chapter.choices.length, greaterThanOrEqualTo(2));
+        // v2.0 Kelivo 铁律：一旦已吐正文，绝不发 restart 抹屏，交由用户原地继续生成或直接落幕
+        expect(events.any((e) => e.kind == GenEventKind.restart), isFalse);
+        final interruptedEvents =
+            events.where((e) => e.kind == GenEventKind.interrupted).toList();
+        expect(interruptedEvents.length, 1);
+        final combined = events
+            .where((e) => e.kind == GenEventKind.contentDelta)
+            .map((e) => e.text)
+            .join();
+        expect(combined.length, greaterThanOrEqualTo(200));
       });
 
       test('FallbackService · 网络错误重试严禁注入 retryNudge 训诫提示词', () async {
@@ -2592,8 +2604,8 @@ final x = 1;
             events.where((e) => e.kind == GenEventKind.failed).toList();
         expect(failedEvents.isNotEmpty, isTrue);
 
-        // 验证收到的 3 轮请求中，系统提示词绝不包含任何 retryNudge 训诫内容
-        expect(mockClient.receivedMessages.length, 3);
+        // 验证首 token 前重连轮次中，系统提示词绝不包含任何 retryNudge 训诫内容
+        expect(mockClient.receivedMessages.length, greaterThanOrEqualTo(2));
         for (final reqMessages in mockClient.receivedMessages) {
           final sys = reqMessages.first['content'] ?? '';
           expect(sys, isNot(contains('【指令约束】')));
@@ -2663,7 +2675,7 @@ final x = 1;
         expect(p.choices.length, 2);
       });
 
-      test('FallbackService · 网络中断且正文不足 200 字时，自动重连重试直至耗尽，最终抛出失败并保留现场', () async {
+      test('FallbackService · 网络中断且已吐出短正文时严禁清屏重跑，转入可续写 interrupted 态', () async {
         final mockClient = _MockNetworkInterruptWithShortBodyClient();
         final fallback = FallbackService(mockClient);
         final book = WorldBook(
@@ -2682,14 +2694,14 @@ final x = 1;
           playerAction: '推门而入',
         ).toList();
 
-        // 验证失败事件被触发（重试耗尽后）
-        final failedEvents =
-            events.where((e) => e.kind == GenEventKind.failed).toList();
-        expect(failedEvents.length, 1);
-        expect(failedEvents.first.text, contains('网络数据流意外中断'));
+        expect(events.any((e) => e.kind == GenEventKind.restart), isFalse);
+        final interruptedEvents =
+            events.where((e) => e.kind == GenEventKind.interrupted).toList();
+        expect(interruptedEvents.length, 1);
+        expect(interruptedEvents.first.text, contains('网络数据流意外中断'));
       });
 
-      test('GenerationController · 推演失败时严禁无脑清空 live 缓冲', () async {
+      test('GenerationController · 推演中断时严禁清空 live 缓冲并转入 interrupted', () async {
         final mockClient = _MockNetworkInterruptWithShortBodyClient();
         final controller = GenerationController.forSlot(
           'test_slot_live_preserve',
@@ -2719,11 +2731,11 @@ final x = 1;
           book: book,
         );
 
-        expect(controller.status, GenerationStatus.failed);
-        // live 缓冲不为空，保留已接收文本现场
+        expect(controller.status, GenerationStatus.interrupted);
+        expect(controller.hasLiveBody, isTrue);
       });
 
-      group('v1.3.9 · 彻底物理隔离思考草稿与断流重试容灾', () {
+      group('v1.3.9 → v2.0 · 物理隔离思考草稿与零清屏原地续写', () {
         test('ResponseParser.splitLive · 真实日志场景：思考草稿中出现 <date> 与 <state> 绝对零外泄到正文区', () {
           // 模拟真实百炼日志中的 reasoning_content 流入
           const rawDuringReasoning = '<think>我们需要响应玩家主宰模式。'
@@ -2752,7 +2764,7 @@ final x = 1;
               reason: '真正的正文流出后，思考草稿绝不倒灌或残留于正文！');
         });
 
-        test('FallbackService · 网络异常遇到残文时优先自动发起重试，严禁在首轮直接截断造成断章', () async {
+        test('FallbackService · 已吐出正文遇网络异常绝不抹屏重跑，发 interrupted 保留残文', () async {
           final mockClient = _MockNetworkInterruptOnceThenSucceedClient();
           final fallback = FallbackService(mockClient);
           final book = WorldBook(
@@ -2771,23 +2783,15 @@ final x = 1;
             playerAction: '致电各省市委',
           ).toList();
 
-          // 验证经历了 restart 事件与网络波动提示
-          final restartEvents =
-              events.where((e) => e.kind == GenEventKind.restart).toList();
-          expect(restartEvents.isNotEmpty, isTrue,
-              reason: '首轮网络异常后应清空旧残文并自动重连');
-
-          final noticeEvents =
-              events.where((e) => e.kind == GenEventKind.notice).toList();
           expect(
-              noticeEvents.any((n) => n.text.contains('正在重新连接并完整推演')), isTrue);
-
-          // 验证最终拿到完整推演，而非首轮的残章
-          final doneEvents =
-              events.where((e) => e.kind == GenEventKind.done).toList();
-          expect(doneEvents.length, 1);
-          expect(doneEvents.first.chapter!.body, contains('全国各地电报如雪片般飞来'));
-          expect(doneEvents.first.chapter!.choices.length, 2);
+            events.where((e) => e.kind == GenEventKind.restart),
+            isEmpty,
+            reason: 'v2.0 铁律：已向读者展示正文后，严禁再发 restart 清屏重跑',
+          );
+          final interrupted =
+              events.where((e) => e.kind == GenEventKind.interrupted).toList();
+          expect(interrupted.length, 1);
+          expect(interrupted.first.text, contains('已完整保留上方正文'));
         });
       });
     });

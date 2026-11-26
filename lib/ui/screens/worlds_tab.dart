@@ -1,17 +1,19 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:forui/forui.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../models/world_book.dart';
+import '../themes/app_theme.dart';
+import '../widgets/world_book_cover.dart';
 
-/// 「世界」标签页 —— 我创造什么。
-///
-/// 列表是用户自己建的/导入的世界书；应用不内置任何剧本。
+/// 「世界」书房标签页（`forui` 卡片 + 出版物书封 + 文件/示例导入）。
 class WorldsTab extends StatelessWidget {
   final List<WorldBook> books;
-
-  /// 每本书已有的进度（bookId → 幕数）。有进度的显示「继续 · 第 N 幕」。
   final Map<String, int> progressByBook;
   final VoidCallback onCreate;
   final VoidCallback onImport;
+  final VoidCallback? onImportSample;
   final ValueChanged<WorldBook> onEdit;
   final ValueChanged<WorldBook> onMenu;
   final ValueChanged<WorldBook> onStartSession;
@@ -22,6 +24,7 @@ class WorldsTab extends StatelessWidget {
     required this.progressByBook,
     required this.onCreate,
     required this.onImport,
+    this.onImportSample,
     required this.onEdit,
     required this.onMenu,
     required this.onStartSession,
@@ -29,56 +32,57 @@ class WorldsTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final palette = AppTheme.readingOf(context);
 
     return CustomScrollView(
       slivers: <Widget>[
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
           sliver: SliverToBoxAdapter(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Text(
-                  '我的世界',
+                  '世界书房',
                   style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w600,
-                    color: theme.colorScheme.onSurface,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w700,
+                    color: palette.ink,
+                    fontFamilyFallback: AppTheme.serifFontFallback,
                   ),
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 4),
                 Text(
-                  '一个世界书 = 一段设定。你演谁、身处什么时代、用什么文风，全在这里决定。',
+                  '一本世界书即一座舞台。你演谁、身处何世、用何笔法，尽在于此。',
                   style: TextStyle(
-                    fontSize: 12.5,
-                    height: 1.7,
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                    fontSize: 13,
+                    height: 1.55,
+                    color: palette.muted,
                   ),
                 ),
                 const SizedBox(height: 16),
                 Row(
                   children: <Widget>[
                     Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: onImport,
-                        icon: const Icon(Icons.download_rounded, size: 18),
-                        label: const Text('导入'),
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          side: BorderSide(color: theme.dividerColor),
-                        ),
+                      child: FButton(
+                        variant: FButtonVariant.outline,
+                        prefix: const Icon(LucideIcons.folderInput, size: 16),
+                        onPress: () {
+                          HapticFeedback.lightImpact();
+                          onImport();
+                        },
+                        child: const Text('导入'),
                       ),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
-                      child: FilledButton.icon(
-                        onPressed: onCreate,
-                        icon: const Icon(Icons.add_rounded, size: 18),
-                        label: const Text('创建世界'),
-                        style: FilledButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
+                      child: FButton(
+                        prefix: const Icon(LucideIcons.plus, size: 16),
+                        onPress: () {
+                          HapticFeedback.lightImpact();
+                          onCreate();
+                        },
+                        child: const Text('创建世界'),
                       ),
                     ),
                   ],
@@ -91,136 +95,208 @@ class WorldsTab extends StatelessWidget {
           SliverFillRemaining(
             hasScrollBody: false,
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 40),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: <Widget>[
-                  Text(
-                    '还没有世界',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: theme.colorScheme.onSurface,
+              padding: const EdgeInsets.fromLTRB(24, 12, 24, 96),
+              child: Center(
+                child: FCard(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(22, 26, 22, 22),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            color: palette.accent.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          alignment: Alignment.center,
+                          child: Icon(
+                            LucideIcons.library,
+                            size: 22,
+                            color: palette.accent,
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        Text(
+                          '书架尚空',
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w700,
+                            color: palette.ink,
+                            fontFamilyFallback: AppTheme.serifFontFallback,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          '你可以一句话让 AI 扩写新世界、从手机导入 .json/.txt 文件，或直接体验内置示例。',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 13,
+                            height: 1.65,
+                            color: palette.muted,
+                          ),
+                        ),
+                        if (onImportSample != null) ...<Widget>[
+                          const SizedBox(height: 18),
+                          FButton(
+                            variant: FButtonVariant.secondary,
+                            prefix: const Icon(
+                              LucideIcons.bookmarkPlus,
+                              size: 16,
+                            ),
+                            onPress: onImportSample,
+                            child: const Text('一键导入示例《决胜西南1949》'),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  Text(
-                    '点上面的「创建世界」写一个，\n或从别处导入一段提示词。',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 13,
-                      height: 1.8,
-                      color:
-                          theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                    ),
-                  ),
-                ],
+                ),
               ),
             ),
           )
         else
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 100),
             sliver: SliverList.builder(
               itemCount: books.length,
               itemBuilder: (_, i) {
                 final b = books[i];
+                final progress = progressByBook[b.id] ?? 0;
                 return Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(10),
-                    onTap: () => onEdit(b),
-                    onLongPress: () => onMenu(b),
-                    child: Container(
-                      padding: const EdgeInsets.all(15),
-                      decoration: BoxDecoration(
-                        color: theme.cardColor,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: theme.dividerColor),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: <Widget>[
-                          Row(
-                            children: <Widget>[
-                              Expanded(
-                                child: Text(
-                                  b.name,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w600,
-                                    color: theme.colorScheme.onSurface,
-                                  ),
-                                ),
-                              ),
-                              if (!b.isPlayable)
-                                Icon(
-                                  Icons.warning_amber_rounded,
-                                  size: 17,
-                                  color: theme.colorScheme.primary,
-                                ),
-                            ],
-                          ),
-                          if (b.era.trim().isNotEmpty) ...<Widget>[
-                            const SizedBox(height: 5),
-                            Text(
-                              b.era,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: theme.colorScheme.onSurface
-                                    .withValues(alpha: 0.6),
-                              ),
-                            ),
-                          ],
-                          if (b.playerRole.trim().isNotEmpty) ...<Widget>[
-                            const SizedBox(height: 5),
-                            Text(
-                              '扮演：${b.playerRole}',
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 12,
-                                height: 1.5,
-                                color: theme.colorScheme.onSurface
-                                    .withValues(alpha: 0.6),
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: 12),
-                          SizedBox(
-                            width: double.infinity,
-                            child: OutlinedButton(
-                              onPressed: b.isPlayable
-                                  ? () => onStartSession(b)
-                                  : null,
-                              style: OutlinedButton.styleFrom(
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 10),
-                                side: BorderSide(color: theme.dividerColor),
-                              ),
-                              child: Text(
-                                !b.isPlayable
-                                    ? '还缺必填项，点开补全'
-                                    : (progressByBook[b.id] ?? 0) > 0
-                                        ? '继续 · 第 ${progressByBook[b.id]} 幕'
-                                        : '进入这个世界',
-                                style: const TextStyle(fontSize: 13),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: _bookShelfCard(context, palette, b, progress),
                 );
               },
             ),
           ),
       ],
+    );
+  }
+
+  Widget _bookShelfCard(
+    BuildContext context,
+    ReadingPalette palette,
+    WorldBook b,
+    int progress,
+  ) {
+    return GestureDetector(
+      onTap: () {
+        HapticFeedback.selectionClick();
+        onEdit(b);
+      },
+      onLongPress: () => onMenu(b),
+      child: FCard(
+        child: Padding(
+          padding: const EdgeInsets.all(15),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              WorldBookCover(
+                book: b,
+                chapterCount: progress,
+                width: 72,
+                height: 100,
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Expanded(
+                          child: Text(
+                            b.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              color: palette.ink,
+                              fontFamilyFallback: AppTheme.serifFontFallback,
+                            ),
+                          ),
+                        ),
+                        FButton.icon(
+                          variant: FButtonVariant.ghost,
+                          size: FButtonSizeVariant.xs,
+                          onPress: () => onMenu(b),
+                          child: Icon(
+                            LucideIcons.ellipsis,
+                            size: 17,
+                            color: palette.muted,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (b.era.trim().isNotEmpty) ...<Widget>[
+                      const SizedBox(height: 2),
+                      Text(
+                        b.era.trim(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 12, color: palette.accent),
+                      ),
+                    ],
+                    if (b.playerRole.trim().isNotEmpty) ...<Widget>[
+                      const SizedBox(height: 4),
+                      Text(
+                        '扮演：${b.playerRole.trim()}',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          height: 1.45,
+                          color: palette.muted,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: FButton(
+                            variant: b.isPlayable
+                                ? (progress > 0
+                                    ? FButtonVariant.primary
+                                    : FButtonVariant.secondary)
+                                : FButtonVariant.outline,
+                            size: FButtonSizeVariant.sm,
+                            prefix: Icon(
+                              !b.isPlayable
+                                  ? LucideIcons.circleAlert
+                                  : (progress > 0
+                                      ? LucideIcons.play
+                                      : LucideIcons.bookOpen),
+                              size: 15,
+                            ),
+                            onPress: b.isPlayable
+                                ? () {
+                                    HapticFeedback.lightImpact();
+                                    onStartSession(b);
+                                  }
+                                : () => onEdit(b),
+                            child: Text(
+                              !b.isPlayable
+                                  ? '补全必填项'
+                                  : progress > 0
+                                      ? '继续 · 第 $progress 幕'
+                                      : '进入世界',
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:forui/forui.dart';
 
-/// 阅读面专用色板。
-///
-/// 挂在 [ThemeData.extensions] 上，阅读页通过 [AppTheme.readingOf] 取。
-/// 单独抽出来是因为阅读页要的颜色比 Material 语义色更细：
-/// 页面底色、正文墨色、极淡分隔线、幕首标记色、选项卡底色。
+import 'surface_ladder.dart';
+
+/// 阅读面专用色板（与 [SurfaceLadder] 及 `forui` [FColors] 同源派生）。
 class ReadingPalette extends ThemeExtension<ReadingPalette> {
   /// 阅读页底
   final Color page;
@@ -15,7 +15,7 @@ class ReadingPalette extends ThemeExtension<ReadingPalette> {
   /// 次要文字（日期、署名、提示）
   final Color muted;
 
-  /// 极淡分隔线 —— 只用来分隔幕，不能抢正文
+  /// 极淡分隔线
   final Color rule;
 
   /// 强调色（幕首标记、你的行动、进行中）
@@ -27,7 +27,7 @@ class ReadingPalette extends ThemeExtension<ReadingPalette> {
   /// 选项卡描边
   final Color chipBorder;
 
-  /// 顶栏遮罩
+  /// 顶底毛玻璃遮罩底色
   final Color scrim;
 
   const ReadingPalette({
@@ -79,146 +79,125 @@ class ReadingPalette extends ThemeExtension<ReadingPalette> {
   }
 }
 
-/// 应用主题。
+class _ThemeBundle {
+  final FThemeData forui;
+  final ThemeData material;
+  final ReadingPalette reading;
+  final SurfaceLadder ladder;
+
+  const _ThemeBundle({
+    required this.forui,
+    required this.material,
+    required this.reading,
+    required this.ladder,
+  });
+}
+
+/// 拟境 v2.0 主题体系：`forui` 触控设计系统 + Claude 文学纸墨配色 + HCT 五级容器阶梯。
 ///
-/// ## 2026-09-25 新增「拟境」
-///
-/// 原有的三套（时代报章 / 暗夜墨石 / 素雅宣纸）是按「1949 历史推演」
-/// 那个定位设计的 —— 纸感、年代标记明显。应用改名「拟境」后，
-/// 定位变成**世界书驱动的情境推演**：不限题材，可能是历史，也可能是
-/// 架空江湖或近未来都市。
-///
-/// 所以**新增**一套「拟境」作为这套定位的旗舰皮肤，原三套**原样保留**
-/// （老用户的选择不该被拿走）。
-///
-/// 「拟境」的视觉思路：不是"一页纸"，而是"另一个世界的空气" ——
-/// 冷调深墨底 + 雾蓝强调色，长时间沉浸阅读不累眼。
-/// 与「暗夜墨石」的区别：那套是暖黑 + 橘调（台灯下的旧书），
-/// 这套是冷黑 + 雾蓝（入境时的微光）。
-///
-/// | id | 名称 | 定位 |
-/// |---|---|---|
-/// | `mirage` | 拟境 | 冷调深墨，旗舰皮肤 |
-/// | `vintage` | 时代报章 | 暖纸 + 砖红，旧报纸质感 |
-/// | `dark` | 暗夜墨石 | 暖黑 + 橘调，夜读护眼 |
-/// | `parchment` | 素雅宣纸 | 亮白纸面，典雅白描 |
+/// 保留四套用户熟悉的皮肤 ID（`mirage` / `vintage` / `dark` / `parchment`），
+/// 视觉质感全面升级：告别纯黑惨白与 1px 死灰框，呈现温润纸墨、柔和明度阶梯与优雅书卷气。
 class AppTheme {
   AppTheme._();
 
-  /// 拟境 —— 冷调深墨。为沉浸式推演设计的旗舰皮肤。
-  static final ThemeData mirage = _build(
-    brightness: Brightness.dark,
-    bg: const Color(0xFF0E1218),
-    surface: const Color(0xFF171D25),
-    primary: const Color(0xFF7FA6C4),
-    text: const Color(0xFFDAE1E8),
-    divider: const Color(0xFF232B35),
-    palette: const ReadingPalette(
-      page: Color(0xFF0E1218),
-      ink: Color(0xFFD6DEE6),
-      muted: Color(0xFF7E8996),
-      rule: Color(0xFF232B35),
-      accent: Color(0xFF7FA6C4),
-      chip: Color(0xFF161C24),
-      chipBorder: Color(0xFF28313C),
-      scrim: Color(0xF20E1218),
-    ),
-  );
-
-  /// 时代报章 —— 50-70 年代公文档案与报章质感。
-  static final ThemeData vintage = _build(
-    brightness: Brightness.light,
-    bg: const Color(0xFFF4EFE6),
-    surface: const Color(0xFFFAF7F2),
-    primary: const Color(0xFFA52A2A),
-    text: const Color(0xFF22201D),
-    divider: const Color(0xFFDDD6C9),
-    palette: const ReadingPalette(
-      page: Color(0xFFF4EFE6),
-      ink: Color(0xFF22201D),
-      muted: Color(0xFF8C8375),
-      rule: Color(0xFFDDD6C9),
-      accent: Color(0xFFA52A2A),
-      chip: Color(0xFFFAF7F2),
-      chipBorder: Color(0xFFDDD6C9),
-      scrim: Color(0xF2F4EFE6),
-    ),
-  );
-
-  /// 暗夜墨石 —— 夜读护眼。
-  static final ThemeData dark = _build(
-    brightness: Brightness.dark,
-    bg: const Color(0xFF141416),
-    surface: const Color(0xFF202024),
-    primary: const Color(0xFFD48B54),
-    text: const Color(0xFFE6E3DE),
-    divider: const Color(0xFF2E2E33),
-    palette: const ReadingPalette(
-      page: Color(0xFF141416),
-      ink: Color(0xFFE6E3DE),
-      muted: Color(0xFF8E8B86),
-      rule: Color(0xFF2E2E33),
-      accent: Color(0xFFD48B54),
-      chip: Color(0xFF202024),
-      chipBorder: Color(0xFF2E2E33),
-      scrim: Color(0xF2141416),
-    ),
-  );
-
-  /// 素雅宣纸 —— 典雅白描。
-  static final ThemeData parchment = _build(
-    brightness: Brightness.light,
-    bg: const Color(0xFFFAF6EE),
-    surface: Colors.white,
-    primary: const Color(0xFF5E503F),
-    text: const Color(0xFF282522),
-    divider: const Color(0xFFE4DEC8),
-    palette: const ReadingPalette(
-      page: Color(0xFFFAF6EE),
-      ink: Color(0xFF282522),
-      muted: Color(0xFF8E8778),
-      rule: Color(0xFFE4DEC8),
-      accent: Color(0xFF5E503F),
-      chip: Color(0xFFFFFFFF),
-      chipBorder: Color(0xFFE4DEC8),
-      scrim: Color(0xF2FAF6EE),
-    ),
-  );
-
-  /// 拟境排在最前 —— 它是这套定位的旗舰皮肤。
-  static const List<ThemePreset> presets = <ThemePreset>[
-    ThemePreset(id: 'mirage', label: '拟境', desc: '冷调深墨'),
-    ThemePreset(id: 'vintage', label: '时代报章', desc: '暖纸砖红'),
-    ThemePreset(id: 'dark', label: '暗夜墨石', desc: '暖黑夜读'),
-    ThemePreset(id: 'parchment', label: '素雅宣纸', desc: '亮白典雅'),
+  /// 中文文学衬线字体回退链（用于书名扉页、幕首及开启「衬线阅读」时的正文）。
+  static const List<String> serifFontFallback = <String>[
+    'Noto Serif CJK SC',
+    'Noto Serif SC',
+    'Source Han Serif SC',
+    'Songti SC',
+    'STSong',
+    'SimSun',
+    'Georgia',
+    'serif',
   ];
 
-  /// 新装用户默认用「拟境」；老用户存过的旧值原样生效。
+  static final _ThemeBundle _mirage = _createBundle(
+    debugLabel: 'Nijing Mirage Dark',
+    brightness: Brightness.dark,
+    page: const Color(0xFF0E1218),
+    ink: const Color(0xFFDCE3EB),
+    muted: const Color(0xFF8390A0),
+    accent: const Color(0xFF82AAC9),
+    onAccent: const Color(0xFF0A141E),
+    destructive: const Color(0xFFE06C75),
+  );
+
+  /// 时代报章（Claude 象牙暖纸 + 暖炭墨 + 赤陶砖红）
+  static final _ThemeBundle _vintage = _createBundle(
+    debugLabel: 'Nijing Vintage Editorial',
+    brightness: Brightness.light,
+    page: const Color(0xFFFAF9F5),
+    ink: const Color(0xFF141413),
+    muted: const Color(0xFF7B7870),
+    accent: const Color(0xFFC96442),
+    onAccent: const Color(0xFFFAF9F5),
+    destructive: const Color(0xFFB9382C),
+  );
+
+  /// 暗夜墨石（Claude 橄榄暖炭黑 + 暖象牙墨 + 琥珀暖橘）
+  static final _ThemeBundle _dark = _createBundle(
+    debugLabel: 'Nijing Warm Slate Dark',
+    brightness: Brightness.dark,
+    page: const Color(0xFF141413),
+    ink: const Color(0xFFEBE8E1),
+    muted: const Color(0xFF938F86),
+    accent: const Color(0xFFD98856),
+    onAccent: const Color(0xFF1A120B),
+    destructive: const Color(0xFFE0685A),
+  );
+
+  /// 素雅宣纸（温润宣白 + 古墨 + 赭石褐）
+  static final _ThemeBundle _parchment = _createBundle(
+    debugLabel: 'Nijing Parchment Light',
+    brightness: Brightness.light,
+    page: const Color(0xFFF6F3EB),
+    ink: const Color(0xFF23201C),
+    muted: const Color(0xFF857E71),
+    accent: const Color(0xFF6B5842),
+    onAccent: const Color(0xFFFAF8F3),
+    destructive: const Color(0xFFB43F34),
+  );
+
+  static ThemeData get mirage => _mirage.material;
+  static ThemeData get vintage => _vintage.material;
+  static ThemeData get dark => _dark.material;
+  static ThemeData get parchment => _parchment.material;
+
+  static const List<ThemePreset> presets = <ThemePreset>[
+    ThemePreset(id: 'mirage', label: '拟境', desc: '冷调深墨 · 雾蓝微光'),
+    ThemePreset(id: 'vintage', label: '纸墨', desc: '象牙暖纸 · 赤陶书卷'),
+    ThemePreset(id: 'dark', label: '墨石', desc: '暖炭夜读 · 琥珀柔光'),
+    ThemePreset(id: 'parchment', label: '宣纸', desc: '素雅古纸 · 赭墨白描'),
+  ];
+
   static const String defaultId = 'mirage';
 
-  static ThemeData getTheme(String mode) {
+  static _ThemeBundle _bundleOf(String mode) {
     switch (mode) {
       case 'mirage':
-        return mirage;
+        return _mirage;
       case 'dark':
-        return dark;
+        return _dark;
       case 'parchment':
-        return parchment;
+        return _parchment;
       case 'vintage':
       default:
-        return vintage;
+        return _vintage;
     }
   }
 
-  /// 取当前主题的阅读面色板。
-  static ReadingPalette readingOf(BuildContext context) =>
-      Theme.of(context).extension<ReadingPalette>() ??
-      vintage.extension<ReadingPalette>()!;
+  static ThemeData getTheme(String mode) => _bundleOf(mode).material;
 
-  /// 按主题 id 取色板 —— 设置页做主题预览用。
-  static ReadingPalette paletteOfId(String id) =>
-      getTheme(id).extension<ReadingPalette>() ??
-      vintage.extension<ReadingPalette>()!;
+  static FThemeData getForuiTheme(String mode) => _bundleOf(mode).forui;
+
+  static ReadingPalette readingOf(BuildContext context) =>
+      Theme.of(context).extension<ReadingPalette>() ?? _mirage.reading;
+
+  static SurfaceLadder ladderOf(BuildContext context) =>
+      Theme.of(context).extension<SurfaceLadder>() ?? _mirage.ladder;
+
+  static ReadingPalette paletteOfId(String id) => _bundleOf(id).reading;
 
   static double getFontSize(String size) {
     switch (size) {
@@ -232,64 +211,158 @@ class AppTheme {
     }
   }
 
-  static ThemeData _build({
+  static _ThemeBundle _createBundle({
+    required String debugLabel,
     required Brightness brightness,
-    required Color bg,
-    required Color surface,
-    required Color primary,
-    required Color text,
-    required Color divider,
-    required ReadingPalette palette,
+    required Color page,
+    required Color ink,
+    required Color muted,
+    required Color accent,
+    required Color onAccent,
+    required Color destructive,
   }) {
-    return ThemeData(
+    final isDark = brightness == Brightness.dark;
+    final ladder = SurfaceLadder.derive(
+      page: page,
+      ink: ink,
+      brightness: brightness,
+    );
+
+    final fColors = FColors(
+      brightness: brightness,
+      systemOverlayStyle:
+          isDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark,
+      barrier: isDark ? const Color(0x99000000) : const Color(0x4D000000),
+      background: ladder.page,
+      foreground: ink,
+      primary: accent,
+      primaryForeground: onAccent,
+      secondary: ladder.container,
+      secondaryForeground: ink,
+      muted: ladder.containerLow,
+      mutedForeground: muted,
+      destructive: destructive,
+      destructiveForeground: const Color(0xFFFAFAFA),
+      error: destructive,
+      errorForeground: const Color(0xFFFAFAFA),
+      card: ladder.card,
+      border: ladder.hairlineStrong,
+    );
+
+    final fTheme = FThemeData(
+      debugLabel: debugLabel,
+      colors: fColors,
+      touch: true,
+    );
+
+    final reading = ReadingPalette(
+      page: ladder.page,
+      ink: ink,
+      muted: muted,
+      rule: ladder.hairline,
+      accent: accent,
+      chip: ladder.card,
+      chipBorder: ladder.hairlineStrong,
+      scrim: ladder.page.withValues(alpha: 0.90),
+    );
+
+    final colorScheme = ColorScheme.fromSeed(
+      seedColor: accent,
+      brightness: brightness,
+    ).copyWith(
+      brightness: brightness,
+      primary: accent,
+      onPrimary: onAccent,
+      surface: ladder.page,
+      onSurface: ink,
+      surfaceContainerLowest: ladder.containerLowest,
+      surfaceContainerLow: ladder.containerLow,
+      surfaceContainer: ladder.container,
+      surfaceContainerHigh: ladder.containerHigh,
+      surfaceContainerHighest: ladder.containerHighest,
+      outline: ladder.hairlineStrong,
+      outlineVariant: ladder.hairline,
+      error: destructive,
+    );
+
+    final material = ThemeData(
       useMaterial3: true,
       brightness: brightness,
-      scaffoldBackgroundColor: bg,
-      canvasColor: bg,
-      cardColor: surface,
-      dividerColor: divider,
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: primary,
-        brightness: brightness,
-      ).copyWith(
-        primary: primary,
-        surface: bg,
-        onSurface: text,
-        outline: divider,
-      ),
-      extensions: <ThemeExtension<dynamic>>[palette],
+      scaffoldBackgroundColor: ladder.page,
+      canvasColor: ladder.page,
+      cardColor: ladder.card,
+      dividerColor: ladder.hairline,
+      colorScheme: colorScheme,
+      extensions: <ThemeExtension<dynamic>>[reading, ladder],
       appBarTheme: AppBarTheme(
-        backgroundColor: bg,
-        foregroundColor: text,
+        backgroundColor: ladder.page,
+        foregroundColor: ink,
+        surfaceTintColor: Colors.transparent,
         elevation: 0,
-        centerTitle: true,
+        scrolledUnderElevation: 0,
+        centerTitle: false,
       ),
-      drawerTheme: DrawerThemeData(backgroundColor: bg),
-      dividerTheme: DividerThemeData(color: divider, thickness: 0.8, space: 1),
+      drawerTheme: DrawerThemeData(
+        backgroundColor: ladder.page,
+        surfaceTintColor: Colors.transparent,
+      ),
+      dividerTheme: DividerThemeData(
+        color: ladder.hairline,
+        thickness: 0.8,
+        space: 1,
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: ladder.card,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: ladder.hairlineStrong, width: 0.8),
+        ),
+      ),
+      bottomSheetTheme: BottomSheetThemeData(
+        backgroundColor: ladder.card,
+        surfaceTintColor: Colors.transparent,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+      ),
       inputDecorationTheme: InputDecorationTheme(
         isDense: true,
-        labelStyle: TextStyle(fontSize: 13, color: text.withValues(alpha: 0.75)),
-        hintStyle: TextStyle(fontSize: 12, color: text.withValues(alpha: 0.38)),
+        filled: true,
+        fillColor: ladder.containerLow,
+        labelStyle: TextStyle(fontSize: 13, color: muted),
+        hintStyle: TextStyle(fontSize: 13, color: muted.withValues(alpha: 0.65)),
         contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: divider),
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: ladder.hairlineStrong, width: 0.8),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: divider),
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: ladder.hairlineStrong, width: 0.8),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: primary, width: 1.4),
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: accent, width: 1.4),
         ),
       ),
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
-        backgroundColor: surface,
-        contentTextStyle: TextStyle(color: text, fontSize: 13),
+        backgroundColor: ladder.containerHighest,
+        contentTextStyle: TextStyle(color: ink, fontSize: 13),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: ladder.hairlineStrong, width: 0.8),
+        ),
       ),
+    );
+
+    return _ThemeBundle(
+      forui: fTheme,
+      material: material,
+      reading: reading,
+      ladder: ladder,
     );
   }
 }
@@ -297,8 +370,6 @@ class AppTheme {
 class ThemePreset {
   final String id;
   final String label;
-
-  /// 设置页里的一句话说明
   final String desc;
 
   const ThemePreset({

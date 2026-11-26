@@ -4,7 +4,6 @@ import 'world_state.dart';
 /// 一幕推演节点。
 class ChapterNode {
   /// 模型原始输出保留上限（按字符计，约 30KB）。
-  /// 异常模型输出不至于把存档无限撑大。
   static const int rawOutputLimit = 30000;
 
   final int chapterIndex;
@@ -17,29 +16,23 @@ class ChapterNode {
   final List<CastEntry> cast;
   final DateTime timestamp;
 
-  /// 模型返回的**原始文本**（未清洗），仅用于排障。
-  ///
-  /// 有了它，「为什么这次 cast 又漏了」可以直接翻出来看模型到底吐了什么，
-  /// 不用再靠猜。只存本地，超过 [rawOutputLimit] 会被截断。
+  /// 模型返回的原始文本（未清洗），仅用于排障。
   final String rawOutput;
 
   /// 这一幕**结束后**的编年史快照。
-  ///
-  /// ⚠️ 回滚到第 N 幕时，编年史必须回到这一幕结束时的样子，
-  /// 否则模型会「记得」那些已经被撤销的未来。旧存档该字段为空，
-  /// 回滚时退回用顶层 chronicle（保守但不会串线）。
   final String? chronicleAfter;
 
   /// 这一幕**结束后**的世界状态快照。
-  ///
-  /// ⚠️ 每幕必须存一份 —— 只在存档顶层存一个「当前 state」是无法回滚到
-  /// 任意历史幕的（顶层存的永远是最新的那份）。
   final WorldState? worldStateAfter;
 
-  /// 模型生成的思维链 / 推演思考过程（`<think>` 或 `<thought>`）。
-  ///
-  /// 正文阅读时完全隔离，读者可在面板中随时折叠查阅。
+  /// 模型生成的思维链 / 推演思考过程。
   final String thought;
+
+  /// 本幕深度思考耗时（毫秒，旧存档默认为 0）。
+  final int thinkingDurationMs;
+
+  /// 本幕世界状态变更精简微标（如「移至重庆 · 新人物 2」，旧存档默认空）。
+  final String stateDiffSummary;
 
   ChapterNode({
     required this.chapterIndex,
@@ -54,6 +47,8 @@ class ChapterNode {
     this.chronicleAfter,
     this.worldStateAfter,
     this.thought = '',
+    this.thinkingDurationMs = 0,
+    this.stateDiffSummary = '',
     DateTime? timestamp,
   })  : choices = choices ?? <String>[],
         glossary = glossary ?? <GlossaryEntry>[],
@@ -73,6 +68,8 @@ class ChapterNode {
         'chronicleAfter': chronicleAfter,
         'worldStateAfter': worldStateAfter?.toJson(),
         'thought': _capped(thought),
+        if (thinkingDurationMs > 0) 'thinkingDurationMs': thinkingDurationMs,
+        if (stateDiffSummary.isNotEmpty) 'stateDiffSummary': stateDiffSummary,
         'timestamp': timestamp.toIso8601String(),
       };
 
@@ -104,6 +101,9 @@ class ChapterNode {
               )
             : null,
         thought: (json['thought'] ?? '').toString(),
+        thinkingDurationMs:
+            (json['thinkingDurationMs'] as num?)?.toInt() ?? 0,
+        stateDiffSummary: (json['stateDiffSummary'] ?? '').toString(),
         timestamp: DateTime.tryParse((json['timestamp'] ?? '').toString()),
       );
 
@@ -111,9 +111,13 @@ class ChapterNode {
     String? content,
     List<String>? choices,
     String? date,
+    List<GlossaryEntry>? glossary,
+    List<CastEntry>? cast,
     String? chronicleAfter,
     WorldState? worldStateAfter,
     String? thought,
+    int? thinkingDurationMs,
+    String? stateDiffSummary,
   }) =>
       ChapterNode(
         chapterIndex: chapterIndex,
@@ -122,12 +126,14 @@ class ChapterNode {
         playerAction: playerAction,
         date: date ?? this.date,
         choices: choices ?? this.choices,
-        glossary: glossary,
-        cast: cast,
+        glossary: glossary ?? this.glossary,
+        cast: cast ?? this.cast,
         rawOutput: rawOutput,
         chronicleAfter: chronicleAfter ?? this.chronicleAfter,
         worldStateAfter: worldStateAfter ?? this.worldStateAfter,
         thought: thought ?? this.thought,
+        thinkingDurationMs: thinkingDurationMs ?? this.thinkingDurationMs,
+        stateDiffSummary: stateDiffSummary ?? this.stateDiffSummary,
         timestamp: timestamp,
       );
 

@@ -1,40 +1,30 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:forui/forui.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:provider/provider.dart';
 
 import '../../data/prefs_store.dart';
-import '../../data/secure_store.dart';
 import '../../models/app_config.dart';
 import '../../services/file_export_service.dart';
-import '../../services/llm_client.dart';
-import '../../services/providers.dart';
 import '../../services/runtime_log.dart';
 import '../../services/text_layout.dart';
+import '../../state/config_provider.dart';
 import '../themes/app_theme.dart';
+import '../widgets/settings_model_section.dart';
 
-/// 设置分区。
-///
-/// 2026-09-25 改：以前「我的」页面有三个入口（模型设置 / 阅读设置 / 推演参数），
-/// 但点进去**都是同一个长页面**，三块内容全混在一起 —— 用户反馈
-/// 「虽然分为三个模块，但点进去内容混杂在一起并未分开」。
-///
-/// 现在每个入口只渲染自己那一段，标题也跟着变。
-/// [all] 是给阅读页菜单里的「设置」用的（那里需要一页看全）。
 enum SettingsSection { model, advanced, reading, debug, all }
 
-/// 设置页。
-///
-/// 注意：这里**没有「剧本进度管理」** —— 那部分已由「世界书」取代，
-/// 世界书的增删改在首页的「世界」标签页里。
+/// 设置页（v2.0 瘦身重构：`forui` 触控骨架 + `ConfigProvider` 响应式状态）。
 class SettingsScreen extends StatefulWidget {
-  final AppConfig config;
-  final ValueChanged<AppConfig> onConfigChanged;
-
-  /// 只显示哪一个分区。默认全部（阅读页菜单用）。
+  final AppConfig? config;
+  final ValueChanged<AppConfig>? onConfigChanged;
   final SettingsSection section;
 
   const SettingsScreen({
     super.key,
-    required this.config,
-    required this.onConfigChanged,
+    this.config,
+    this.onConfigChanged,
     this.section = SettingsSection.all,
   });
 
@@ -43,99 +33,44 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  late AppConfig _config;
-
-  late TextEditingController _keyCtrl;
-  late TextEditingController _wsCtrl;
-  late TextEditingController _modelCtrl;
-  late TextEditingController _baseUrlCtrl;
-
-  bool _obscure = true;
-  bool _testing = false;
-  String _testResult = '';
+  late AppConfig _localConfig;
 
   @override
   void initState() {
     super.initState();
-    _config = widget.config;
-    _keyCtrl = TextEditingController();
-    _wsCtrl = TextEditingController(text: _config.workspaceId);
-    _modelCtrl = TextEditingController(text: _config.modelName);
-    _baseUrlCtrl = TextEditingController(text: _config.baseUrl);
-    _loadKey();
-    _loadLegacyWorkspaceIdIfNeeded();
+    _localConfig = widget.config ?? AppConfig();
   }
 
-  @override
-  void dispose() {
-    _keyCtrl.dispose();
-    _wsCtrl.dispose();
-    _modelCtrl.dispose();
-    _baseUrlCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loadKey() async {
-    final k = await SecureStore.readApiKey();
-    if (!mounted) return;
-    setState(() => _keyCtrl.text = k);
-  }
-
-  Future<void> _loadLegacyWorkspaceIdIfNeeded() async {
-    if (_config.workspaceId.trim().isNotEmpty) return;
-    final ws = await PrefsStore.getString(_kWorkspace) ?? '';
-    if (!mounted || ws.trim().isEmpty) return;
-    setState(() => _wsCtrl.text = ws.trim());
-    _apply(_config.copyWith(workspaceId: ws.trim()), immediate: true);
-  }
-
-  static const String _kWorkspace = 'nijing_workspace_id';
-
-  /// 当前所选主题的一句话说明。
-  String _themeDesc() {
-    for (final p in AppTheme.presets) {
-      if (p.id == _config.themeMode) return p.desc;
+  ConfigProvider? _maybeProvider() {
+    try {
+      return Provider.of<ConfigProvider>(context, listen: false);
+    } catch (_) {
+      return null;
     }
-    return '';
   }
 
-  /// 写入配置。
-  void _apply(
-    AppConfig next, {
-    bool persistKey = false,
-    bool immediate = false,
-  }) {
-    setState(() => _config = next);
-    widget.onConfigChanged(next);
+  AppConfig _readConfig(BuildContext context) {
+    final p = _maybeProvider();
+    if (p != null) {
+      return context.watch<ConfigProvider>().config;
+    }
+    return _localConfig;
+  }
 
-    final raw = next.encode();
-    if (immediate) {
-      PrefsStore.setString('nijing_config_v1', raw);
+  void _apply(AppConfig next, {bool immediate = false}) {
+    setState(() => _localConfig = next);
+    final p = _maybeProvider();
+    if (p != null) {
+      p.updateConfig(next, immediate: immediate);
     } else {
-      PrefsStore.setStringDebounced('nijing_config_v1', raw);
+      widget.onConfigChanged?.call(next);
+      final raw = next.encode();
+      if (immediate) {
+        PrefsStore.setString('nijing_config_v1', raw);
+      } else {
+        PrefsStore.setStringDebounced('nijing_config_v1', raw);
+      }
     }
-
-    if (persistKey) {
-      SecureStore.writeApiKey(_keyCtrl.text.trim());
-    }
-    PrefsStore.setStringDebounced(_kWorkspace, next.workspaceId.trim());
-  }
-
-  Future<void> _test() async {
-    setState(() {
-      _testing = true;
-      _testResult = '';
-    });
-    final err = await LlmClient().testConnection(
-      config: _config,
-      apiKey: _keyCtrl.text.trim(),
-      workspaceId: _config.workspaceId.trim(),
-    );
-    if (!mounted) return;
-    setState(() {
-      _testing = false;
-      _testResult = err == null ? '✅ 连接成功，模型可用。' : '❌ $err';
-    });
   }
 
   bool _shows(SettingsSection s) =>
@@ -144,11 +79,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String get _title {
     switch (widget.section) {
       case SettingsSection.model:
-        return '模型设置';
+        return '模型与接口';
       case SettingsSection.advanced:
         return '推演参数';
       case SettingsSection.reading:
-        return '阅读设置';
+        return '阅读与排版';
       case SettingsSection.debug:
         return '调试与日志';
       case SettingsSection.all:
@@ -158,100 +93,353 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final cfg = _readConfig(context);
+    final palette = AppTheme.readingOf(context);
+    final ladder = AppTheme.ladderOf(context);
 
-    return Scaffold(
-      appBar: AppBar(title: Text(_title)),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 40),
+    return FScaffold(
+      childPad: false,
+      header: FHeader.nested(
+        title: Text(_title),
+        prefixes: <Widget>[
+          FHeaderAction.back(onPress: () => Navigator.of(context).maybePop()),
+        ],
+      ),
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(18, 12, 18, 48),
         children: <Widget>[
-          if (_shows(SettingsSection.model)) ..._modelSection(theme),
-          if (_shows(SettingsSection.advanced)) ..._advancedSection(theme),
-          if (_shows(SettingsSection.reading)) ..._readingSection(theme),
-          if (_shows(SettingsSection.debug)) ..._debugSection(theme),
+          if (_shows(SettingsSection.model)) ...<Widget>[
+            SettingsModelSection(
+              config: cfg,
+              configProvider: _maybeProvider(),
+              onApply: _apply,
+            ),
+            if (widget.section == SettingsSection.all)
+              const SizedBox(height: 22),
+          ],
+          if (_shows(SettingsSection.advanced)) ...<Widget>[
+            _buildAdvancedSection(cfg, palette),
+            if (widget.section == SettingsSection.all)
+              const SizedBox(height: 22),
+          ],
+          if (_shows(SettingsSection.reading)) ...<Widget>[
+            _buildReadingSection(cfg, palette, ladder),
+            if (widget.section == SettingsSection.all)
+              const SizedBox(height: 22),
+          ],
+          if (_shows(SettingsSection.debug)) _buildDebugSection(cfg, palette),
         ],
       ),
     );
   }
 
-  // ---------- 分区四：调试与日志 ----------
+  // ---------- 推演参数 ----------
 
-  List<Widget> _debugSection(ThemeData theme) => <Widget>[
-        _section(theme, '调试与日志'),
-        const SizedBox(height: 12),
-        _switchRow(
-          theme,
-          '记录运行日志',
-          '把请求参数、流式分块、解析判定与错误详情记到内存，供排查生成异常。'
-              '不记录 API Key。默认关闭。',
-          _config.logEnabled,
-          (v) => _apply(
-            _config.copyWith(
-              logEnabled: v,
-              // 关掉总开关时顺带关掉详细模式，避免留下一个无效的「开」
-              verboseLog: v ? _config.verboseLog : false,
+  Widget _buildAdvancedSection(AppConfig cfg, ReadingPalette palette) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        FTileGroup(
+          label: const Text('推演行为'),
+          children: <FTileMixin>[
+            FTile(
+              prefix:
+                  Icon(LucideIcons.sparkles, size: 17, color: palette.accent),
+              title: const Text('主宰模式（最高权限）'),
+              subtitle: const Text('玩家意志即不可撼动的既成事实，AI 绝对顺从展开'),
+              suffix: FSwitch(
+                value: cfg.godMode,
+                onChange: (v) => _apply(cfg.copyWith(godMode: v), immediate: true),
+              ),
             ),
-            immediate: true,
-          ),
-        ),
-        _switchRow(
-          theme,
-          '详细日志（含模型原文）',
-          '额外记录每一条 SSE 原始行与模型输出片段。数据量大，只在复现疑难问题时开。',
-          _config.verboseLog,
-          (v) => _apply(
-            _config.copyWith(verboseLog: v, logEnabled: v || _config.logEnabled),
-            immediate: true,
-          ),
-        ),
-        const SizedBox(height: 12),
-        ValueListenableBuilder<int>(
-          valueListenable: RuntimeLog.revision,
-          builder: (context, _, child) => Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text(
-                RuntimeLog.enabled
-                    ? '当前已记录 ${RuntimeLog.count} 条'
-                        '${RuntimeLog.verbose ? '（详细模式）' : ''}'
-                    : '日志未开启',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+            FTile(
+              prefix:
+                  Icon(LucideIcons.layers, size: 17, color: palette.accent),
+              title: const Text('后台异步解耦档案官'),
+              subtitle: const Text('主模型专心写小说正文，状态/人物/词条在后台零阻塞提取'),
+              suffix: FSwitch(
+                value: cfg.enableBackgroundExtract,
+                onChange: (v) => _apply(
+                  cfg.copyWith(enableBackgroundExtract: v),
+                  immediate: true,
                 ),
               ),
-              const SizedBox(height: 10),
-              Row(
-                children: <Widget>[
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: RuntimeLog.enabled && RuntimeLog.count > 0
-                          ? _exportLog
-                          : null,
-                      icon: const Icon(Icons.save_alt_rounded, size: 18),
-                      label: const Text('导出日志'),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        side: BorderSide(color: theme.dividerColor),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        FCard(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                _sliderBlock(
+                  palette: palette,
+                  label: '发散程度（temperature）',
+                  display: cfg.temperature.toStringAsFixed(2),
+                  value: cfg.temperature,
+                  min: 0.1,
+                  max: 1.4,
+                  onChanged: (v) => _apply(cfg.copyWith(temperature: v)),
+                ),
+                const SizedBox(height: 8),
+                _sliderBlock(
+                  palette: palette,
+                  label: '单幕目标字数',
+                  display: '${cfg.maxWords} 字',
+                  value: cfg.maxWords.toDouble().clamp(200, 3000),
+                  min: 200,
+                  max: 3000,
+                  divisions: 56,
+                  onChanged: (v) => _apply(cfg.copyWith(maxWords: v.round())),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ---------- 阅读与排版 ----------
+
+  Widget _buildReadingSection(
+    AppConfig cfg,
+    ReadingPalette palette,
+    dynamic ladder,
+  ) {
+    final activePreset = AppTheme.presets.firstWhere(
+      (p) => p.id == cfg.themeMode,
+      orElse: () => AppTheme.presets.first,
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        FCard(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    Text(
+                      '纸墨主题',
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w600,
+                        color: palette.ink,
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 10),
-                  OutlinedButton.icon(
-                    onPressed: RuntimeLog.count > 0 ? _clearLog : null,
-                    icon: const Icon(Icons.delete_outline_rounded, size: 18),
-                    label: const Text('清空'),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      side: BorderSide(color: theme.dividerColor),
+                    const Spacer(),
+                    Text(
+                      activePreset.desc,
+                      style: TextStyle(fontSize: 12, color: palette.muted),
                     ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: <Widget>[
+                    for (final preset in AppTheme.presets)
+                      Expanded(
+                        child: Padding(
+                          padding: EdgeInsets.only(
+                            right: preset == AppTheme.presets.last ? 0 : 8,
+                          ),
+                          child: _themeCard(cfg, preset, palette, ladder),
+                        ),
+                      ),
+                  ],
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 14),
+                  child: FDivider(),
+                ),
+                _optionRow(
+                  label: '字号',
+                  options: const <List<String>>[
+                    <String>['sm', '小'],
+                    <String>['md', '中'],
+                    <String>['lg', '大'],
+                  ],
+                  selected: cfg.fontSize,
+                  palette: palette,
+                  ladder: ladder,
+                  onPick: (v) =>
+                      _apply(cfg.copyWith(fontSize: v), immediate: true),
+                ),
+                const SizedBox(height: 10),
+                _sliderBlock(
+                  palette: palette,
+                  label: '行距',
+                  display: cfg.lineHeight.toStringAsFixed(1),
+                  value: cfg.lineHeight,
+                  min: 1.4,
+                  max: 2.6,
+                  divisions: 12,
+                  onChanged: (v) => _apply(cfg.copyWith(lineHeight: v)),
+                ),
+                const SizedBox(height: 6),
+                _optionRow(
+                  label: '首行缩进',
+                  options: TextLayout.indentOptions,
+                  selected: '${cfg.paragraphIndent}',
+                  palette: palette,
+                  ladder: ladder,
+                  onPick: (v) => _apply(
+                    cfg.copyWith(paragraphIndent: int.tryParse(v) ?? 0),
+                    immediate: true,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                _optionRow(
+                  label: '段间距',
+                  options: TextLayout.spacingOptions,
+                  selected: cfg.paragraphSpacing,
+                  palette: palette,
+                  ladder: ladder,
+                  onPick: (v) =>
+                      _apply(cfg.copyWith(paragraphSpacing: v), immediate: true),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        FTileGroup(
+          label: const Text('阅读体验细节'),
+          children: <FTileMixin>[
+            FTile(
+              prefix:
+                  Icon(LucideIcons.bookType, size: 17, color: palette.accent),
+              title: const Text('书卷衬线阅读'),
+              subtitle: const Text('正文切换为典雅宋体风格，支持电报引用与加粗/斜体排版'),
+              suffix: FSwitch(
+                value: cfg.serifReading,
+                onChange: (v) =>
+                    _apply(cfg.copyWith(serifReading: v), immediate: true),
+              ),
+            ),
+            FTile(
+              prefix: Icon(
+                LucideIcons.arrowDownToLine,
+                size: 17,
+                color: palette.accent,
+              ),
+              title: const Text('打开时跳至最新一幕'),
+              suffix: FSwitch(
+                value: cfg.autoScrollToLatest,
+                onChange: (v) => _apply(
+                  cfg.copyWith(autoScrollToLatest: v),
+                  immediate: true,
+                ),
+              ),
+            ),
+            FTile(
+              prefix: Icon(LucideIcons.sun, size: 17, color: palette.accent),
+              title: const Text('阅读防熄屏'),
+              suffix: FSwitch(
+                value: cfg.keepScreenOn,
+                onChange: (v) =>
+                    _apply(cfg.copyWith(keepScreenOn: v), immediate: true),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  // ---------- 调试与日志 ----------
+
+  Widget _buildDebugSection(AppConfig cfg, ReadingPalette palette) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        FTileGroup(
+          label: const Text('诊断日志'),
+          children: <FTileMixin>[
+            FTile(
+              prefix:
+                  Icon(LucideIcons.terminal, size: 17, color: palette.accent),
+              title: const Text('记录运行日志'),
+              subtitle: const Text('内存环形缓冲，所有加密 API Key 自动精准脱敏'),
+              suffix: FSwitch(
+                value: cfg.logEnabled,
+                onChange: (v) => _apply(
+                  cfg.copyWith(
+                    logEnabled: v,
+                    verboseLog: v ? cfg.verboseLog : false,
+                  ),
+                  immediate: true,
+                ),
+              ),
+            ),
+            FTile(
+              prefix:
+                  Icon(LucideIcons.fileCode, size: 17, color: palette.accent),
+              title: const Text('详细日志（含 SSE 原始帧）'),
+              suffix: FSwitch(
+                value: cfg.verboseLog,
+                onChange: (v) => _apply(
+                  cfg.copyWith(verboseLog: v, logEnabled: v || cfg.logEnabled),
+                  immediate: true,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        ValueListenableBuilder<int>(
+          valueListenable: RuntimeLog.revision,
+          builder: (context, _, _) => FCard(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    RuntimeLog.enabled
+                        ? '当前已记录 ${RuntimeLog.count} 条${RuntimeLog.verbose ? '（详细模式）' : ''}'
+                        : '日志未开启',
+                    style: TextStyle(fontSize: 12.5, color: palette.muted),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: FButton(
+                          variant: FButtonVariant.outline,
+                          size: FButtonSizeVariant.sm,
+                          prefix: const Icon(LucideIcons.download, size: 15),
+                          onPress: RuntimeLog.enabled && RuntimeLog.count > 0
+                              ? _exportLog
+                              : null,
+                          child: const Text('导出日志'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      FButton(
+                        variant: FButtonVariant.ghost,
+                        size: FButtonSizeVariant.sm,
+                        mainAxisSize: MainAxisSize.min,
+                        prefix: const Icon(LucideIcons.trash2, size: 15),
+                        onPress: RuntimeLog.count > 0 ? _clearLog : null,
+                        child: const Text('清空'),
+                      ),
+                    ],
                   ),
                 ],
               ),
-            ],
+            ),
           ),
         ),
-      ];
+      ],
+    );
+  }
 
   Future<void> _exportLog() async {
     final text = RuntimeLog.dump();
@@ -269,546 +457,67 @@ class _SettingsScreenState extends State<SettingsScreen> {
         mimeType: 'text/plain',
       );
       if (!ok) {
-        await FileExportService.shareText(
-          title: '拟境 · 运行日志',
-          text: text,
-        );
+        await FileExportService.shareText(title: '拟境 · 运行日志', text: text);
       }
     }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        duration: const Duration(seconds: 6),
         content: Text(
           res.success
-              ? '运行日志（${RuntimeLog.count} 条）已保存至：${res.path}'
+              ? '运行日志已保存至：${res.path}'
               : '导出失败：${res.message}',
-        ),
-        action: SnackBarAction(
-          label: '系统分享',
-          onPressed: () async {
-            if (res.success && res.path != null) {
-              final ok = await FileExportService.shareFile(
-                filePath: res.path!,
-                title: '拟境 · 运行日志',
-                mimeType: 'text/plain',
-              );
-              if (!ok) {
-                await FileExportService.shareText(
-                  title: '拟境 · 运行日志',
-                  text: text,
-                );
-              }
-            } else {
-              await FileExportService.shareText(
-                title: '拟境 · 运行日志',
-                text: text,
-              );
-            }
-          },
         ),
       ),
     );
   }
 
   Future<void> _clearLog() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        content: Text(
-          '清空当前 ${RuntimeLog.count} 条运行日志？',
-          style: const TextStyle(fontSize: 14, height: 1.6),
-        ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('清空'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true) return;
     RuntimeLog.clear();
-    if (!mounted) return;
-    setState(() {});
+    if (mounted) setState(() {});
   }
 
-  // ---------- 分区一：模型 ----------
-
-  List<Widget> _modelSection(ThemeData theme) {
-    final provider = Providers.byId(_config.apiProvider);
-    return <Widget>[
-      _section(theme, 'AI 算力与模型接口'),
-      const SizedBox(height: 12),
-
-      DropdownButtonFormField<String>(
-        initialValue: _config.apiProvider,
-        isExpanded: true,
-        decoration: const InputDecoration(labelText: '服务提供商'),
-        items: Providers.options
-            .map(
-              (p) => DropdownMenuItem<String>(
-                value: p.id,
-                child: Text(p.label, overflow: TextOverflow.ellipsis),
-              ),
-            )
-            .toList(),
-        onChanged: (v) {
-          if (v == null) return;
-          final p = Providers.byId(v);
-          _modelCtrl.text = p.defaultModel;
-          _baseUrlCtrl.text = '';
-          _apply(
-            _config.copyWith(
-              apiProvider: v,
-              modelName: p.defaultModel,
-              baseUrl: '',
-            ),
-            immediate: true,
-          );
-        },
-      ),
-      const SizedBox(height: 14),
-
-      TextField(
-        controller: _keyCtrl,
-        obscureText: _obscure,
-        decoration: InputDecoration(
-          labelText: 'API Key',
-          hintText: 'sk-xxxx',
-          suffixIcon: IconButton(
-            icon: Icon(
-              _obscure ? Icons.visibility_off : Icons.visibility,
-              size: 20,
-            ),
-            onPressed: () => setState(() => _obscure = !_obscure),
-          ),
-        ),
-        onChanged: (_) => _apply(_config, persistKey: true),
-      ),
-      const SizedBox(height: 6),
-      Text(
-        SecureStore.isDegraded
-            ? '⚠️ 当前设备不支持加密存储，Key 仅保存在本次运行的内存中。'
-            : 'Key 以密文保存在本机，不会上传到任何服务器。',
-        style: TextStyle(
-          fontSize: 11.5,
-          height: 1.6,
-          color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
-        ),
-      ),
-      const SizedBox(height: 14),
-
-      if (_config.apiProvider == 'bailian') ...<Widget>[
-        TextField(
-          controller: _wsCtrl,
-          decoration: const InputDecoration(
-            labelText: '业务空间 ID（选填）',
-            hintText: '华北2（北京）填了会改用专属域名，更稳定',
-          ),
-          onChanged: (v) => _apply(_config.copyWith(workspaceId: v.trim())),
-        ),
-        const SizedBox(height: 14),
-      ],
-
-      TextField(
-        controller: _modelCtrl,
-        decoration: const InputDecoration(
-          labelText: '模型代码',
-          hintText: '例如 qwen-plus / deepseek-reasoner / gemini-2.5-pro',
-        ),
-        onChanged: (v) => _apply(_config.copyWith(modelName: v)),
-      ),
-      const SizedBox(height: 8),
-      Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: (_config.apiProvider == 'deepseek'
-                ? Providers.deepseekModels
-                : (_config.apiProvider == 'custom'
-                    ? Providers.customSampleModels
-                    : Providers.bailianModels))
-            .map(
-              (m) => ActionChip(
-                label: Text(m, style: const TextStyle(fontSize: 12)),
-                onPressed: () {
-                  _modelCtrl.text = m;
-                  _apply(_config.copyWith(modelName: m), immediate: true);
-                },
-              ),
-            )
-            .toList(),
-      ),
-      const SizedBox(height: 14),
-
-      _switchRow(
-        theme,
-        '开启深度思考（Thinking 模式）',
-        '开启后模型将先权衡局势再落笔，思考内容物理隔离收纳进「推演思考」面板，绝不混入正文；自动兼容百炼 Qwen3/QwQ、DeepSeek-Reasoner 与自定义推理接口。',
-        _config.enableThinking,
-        (v) => _apply(_config.copyWith(enableThinking: v), immediate: true),
-      ),
-      if (_config.enableThinking) ...<Widget>[
-        const SizedBox(height: 8),
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Row(
-                children: <Widget>[
-                  Text(
-                    '思考预算',
-                    style: TextStyle(
-                      fontSize: 13.5,
-                      color: theme.colorScheme.onSurface,
-                    ),
-                  ),
-                  const Spacer(),
-                  Text(
-                    _thinkingBudgetShortLabel(_config.thinkingBudget),
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: theme.colorScheme.primary,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: const <List<String>>[
-                  <String>['0', '自由不限'],
-                  <String>['1024', '轻度 (1k)'],
-                  <String>['2048', '标准 (2k)'],
-                  <String>['4096', '深度 (4k)'],
-                  <String>['8192', '极深 (8k)'],
-                ]
-                    .map(
-                      (opt) => _chip(
-                        theme,
-                        label: opt[1],
-                        selected: '${_config.thinkingBudget}' == opt[0],
-                        onTap: () => _apply(
-                          _config.copyWith(
-                            thinkingBudget: int.tryParse(opt[0]) ?? 0,
-                          ),
-                          immediate: true,
-                        ),
-                        compact: true,
-                      ),
-                    )
-                    .toList(),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                _thinkingBudgetDesc(_config.thinkingBudget),
-                style: TextStyle(
-                  fontSize: 11.5,
-                  height: 1.5,
-                  color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-      const SizedBox(height: 14),
-
-      if (_config.apiProvider == 'custom') ...<Widget>[
-        TextField(
-          controller: _baseUrlCtrl,
-          decoration: const InputDecoration(
-            labelText: 'Base URL',
-            hintText: 'https://api.example.com/v1',
-          ),
-          onChanged: (v) => _apply(_config.copyWith(baseUrl: v)),
-        ),
-        const SizedBox(height: 14),
-      ],
-
-      OutlinedButton.icon(
-        onPressed: _testing ? null : _test,
-        icon: _testing
-            ? const SizedBox(
-                width: 14,
-                height: 14,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : const Icon(Icons.wifi_tethering_rounded, size: 18),
-        label: Text(_testing ? '测试中…' : '测试连接'),
-        style: OutlinedButton.styleFrom(
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          side: BorderSide(color: theme.dividerColor),
-        ),
-      ),
-      if (_testResult.isNotEmpty) ...<Widget>[
-        const SizedBox(height: 10),
-        SelectableText(
-          _testResult,
-          style: TextStyle(
-            fontSize: 12.5,
-            height: 1.6,
-            color: theme.colorScheme.onSurface,
-          ),
-        ),
-      ],
-      const SizedBox(height: 6),
-      Text(
-        provider.hint,
-        style: TextStyle(
-          fontSize: 11.5,
-          height: 1.6,
-          color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
-        ),
-      ),
-    ];
-  }
-
-  // ---------- 分区二：推演参数 ----------
-
-  List<Widget> _advancedSection(ThemeData theme) => <Widget>[
-        _section(theme, '推演参数'),
-        const SizedBox(height: 6),
-        _switchRow(
-          theme,
-          '主宰模式（绝对权限）',
-          '开启后视玩家所有意志与推演走向为不可撼动的既定事实，AI 将绝对服从且全力配合展开',
-          _config.godMode,
-          (v) => _apply(_config.copyWith(godMode: v), immediate: true),
-        ),
-        const SizedBox(height: 10),
-        _slider(
-          theme,
-          label: '发散程度（temperature）',
-          value: _config.temperature,
-          min: 0.1,
-          max: 1.4,
-          display: _config.temperature.toStringAsFixed(2),
-          onChanged: (v) => _apply(_config.copyWith(temperature: v)),
-        ),
-        _slider(
-          theme,
-          label: '单幕目标字数',
-          value: _config.maxWords.toDouble().clamp(200, 3000),
-          min: 200,
-          max: 3000,
-          divisions: 56,
-          display: '${_config.maxWords} 字',
-          onChanged: (v) => _apply(_config.copyWith(maxWords: v.round())),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          '这两个值会写进提示词。目标字数只影响模型的写作长度，'
-          '实际输出会随剧情需要浮动。',
-          style: TextStyle(
-            fontSize: 11.5,
-            height: 1.7,
-            color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
-          ),
-        ),
-      ];
-
-  // ---------- 分区三：阅读 ----------
-
-  List<Widget> _readingSection(ThemeData theme) => <Widget>[
-        _section(theme, '阅读体验'),
-        const SizedBox(height: 12),
-
-        // 四套皮肤用 Wrap 排 —— 用 Row+Expanded 的话每个只有 70dp 宽，
-        // 「时代报章」这种四字标签会被挤到省略号。
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: AppTheme.presets
-              .map(
-                (p) => _chip(
-                  theme,
-                  label: p.label,
-                  swatch: AppTheme.paletteOfId(p.id).page,
-                  selected: _config.themeMode == p.id,
-                  onTap: () => _apply(
-                    _config.copyWith(themeMode: p.id),
-                    immediate: true,
-                  ),
-                ),
-              )
-              .toList(),
-        ),
-        if (_themeDesc().isNotEmpty) ...<Widget>[
-          const SizedBox(height: 8),
-          Text(
-            _themeDesc(),
-            style: TextStyle(
-              fontSize: 12,
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
-            ),
-          ),
-        ],
-        const SizedBox(height: 12),
-
-        Row(
-          children: <Widget>[
-            Text(
-              '字号',
-              style: TextStyle(
-                fontSize: 13.5,
-                color: theme.colorScheme.onSurface,
-              ),
-            ),
-            const Spacer(),
-            for (final opt in <List<String>>[
-              <String>['sm', '小'],
-              <String>['md', '中'],
-              <String>['lg', '大'],
-            ])
-              Padding(
-                padding: const EdgeInsets.only(left: 6),
-                child: _chip(
-                  theme,
-                  label: opt[1],
-                  selected: _config.fontSize == opt[0],
-                  onTap: () => _apply(
-                    _config.copyWith(fontSize: opt[0]),
-                    immediate: true,
-                  ),
-                  compact: true,
-                ),
-              ),
-          ],
-        ),
-        _slider(
-          theme,
-          label: '行距',
-          value: _config.lineHeight,
-          min: 1.4,
-          max: 2.6,
-          display: _config.lineHeight.toStringAsFixed(1),
-          onChanged: (v) => _apply(_config.copyWith(lineHeight: v)),
-        ),
-
-        // 文字排版：段首缩进格数 + 段间距。
-        // 以前是一个「首行缩进 开/关」的布尔开关 —— 但真正要调的是"缩几格"，
-        // 而且那个开关因为分段逻辑的 bug 根本没生效过。
-        _chipRow(
-          theme,
-          label: '段首缩进',
-          options: TextLayout.indentOptions,
-          selected: '${_config.paragraphIndent}',
-          onPick: (v) => _apply(
-            _config.copyWith(paragraphIndent: int.tryParse(v) ?? 0),
-            immediate: true,
-          ),
-        ),
-        _chipRow(
-          theme,
-          label: '段间距',
-          options: TextLayout.spacingOptions,
-          selected: _config.paragraphSpacing,
-          onPick: (v) => _apply(
-            _config.copyWith(paragraphSpacing: v),
-            immediate: true,
-          ),
-        ),
-        const SizedBox(height: 8),
-        _switchRow(
-          theme,
-          '打开时跳到最新一幕',
-          '从首页「继续进入」直接落在最新进度，不用手动翻到底',
-          _config.autoScrollToLatest,
-          (v) =>
-              _apply(_config.copyWith(autoScrollToLatest: v), immediate: true),
-        ),
-        _switchRow(
-          theme,
-          '顶栏自动隐藏',
-          '单击屏幕唤出，3 秒后自动淡出',
-          _config.autoHideHeader,
-          (v) => _apply(_config.copyWith(autoHideHeader: v), immediate: true),
-        ),
-        _switchRow(
-          theme,
-          '阅读防熄屏',
-          '沉浸推演阅读时保持屏幕常亮，退出或切后台释放',
-          _config.keepScreenOn,
-          (v) => _apply(_config.copyWith(keepScreenOn: v), immediate: true),
-        ),
-      ];
-
-  // ---------- 组件 ----------
-
-  Widget _section(ThemeData theme, String title) => Text(
-        title,
-        style: TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w600,
-          letterSpacing: 0.8,
-          color: theme.colorScheme.primary,
-        ),
-      );
-
-  Widget _chip(
-    ThemeData theme, {
-    required String label,
-    required bool selected,
-    required VoidCallback onTap,
-    bool compact = false,
-    /// 可选预览色 —— 主题选择用它显示这套皮肤的实际观感
-    Color? swatch,
-  }) {
-    final primary = theme.colorScheme.primary;
+  Widget _themeCard(
+    AppConfig cfg,
+    ThemePreset preset,
+    ReadingPalette palette,
+    dynamic ladder,
+  ) {
+    final selected = cfg.themeMode == preset.id;
+    final swatch = AppTheme.paletteOfId(preset.id);
     return InkWell(
-      borderRadius: BorderRadius.circular(6),
-      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      onTap: () {
+        HapticFeedback.selectionClick();
+        _apply(cfg.copyWith(themeMode: preset.id), immediate: true);
+      },
       child: Container(
-        padding: EdgeInsets.symmetric(
-          horizontal: compact ? 14 : 8,
-          vertical: compact ? 6 : 9,
-        ),
-        alignment: Alignment.center,
+        padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 6),
         decoration: BoxDecoration(
-          color: selected ? primary.withValues(alpha: 0.12) : theme.cardColor,
-          borderRadius: BorderRadius.circular(6),
+          color: swatch.page,
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: selected ? primary : theme.dividerColor,
-            width: selected ? 1.4 : 1,
+            color: selected ? palette.accent : ladder.hairlineStrong,
+            width: selected ? 1.8 : 0.8,
           ),
         ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
+        child: Column(
           children: <Widget>[
-            if (swatch != null) ...<Widget>[
-              Container(
-                width: 12,
-                height: 12,
-                decoration: BoxDecoration(
-                  color: swatch,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color:
-                        theme.colorScheme.onSurface.withValues(alpha: 0.25),
-                  ),
-                ),
+            Container(
+              width: 18,
+              height: 4,
+              decoration: BoxDecoration(
+                color: swatch.accent,
+                borderRadius: BorderRadius.circular(2),
               ),
-              const SizedBox(width: 6),
-            ],
-            Flexible(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 12.5,
-                  fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
-                  color: selected ? primary : theme.colorScheme.onSurface,
-                ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              preset.label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: swatch.ink,
               ),
             ),
           ],
@@ -817,129 +526,93 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  /// 一行「标签 + 若干互斥选项」。
-  Widget _chipRow(
-    ThemeData theme, {
+  Widget _optionRow({
     required String label,
     required List<List<String>> options,
     required String selected,
+    required ReadingPalette palette,
+    required dynamic ladder,
     required ValueChanged<String> onPick,
-  }) =>
-      Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: Row(
-          children: <Widget>[
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 13.5,
-                color: theme.colorScheme.onSurface,
-              ),
-            ),
-            const Spacer(),
-            for (final opt in options)
-              Padding(
-                padding: const EdgeInsets.only(left: 6),
-                child: _chip(
-                  theme,
-                  label: opt[1],
-                  selected: selected == opt[0],
-                  onTap: () => onPick(opt[0]),
-                  compact: true,
+  }) {
+    return Row(
+      children: <Widget>[
+        Text(label, style: TextStyle(fontSize: 13.5, color: palette.ink)),
+        const Spacer(),
+        for (final opt in options)
+          Padding(
+            padding: const EdgeInsets.only(left: 6),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(9),
+              onTap: () {
+                HapticFeedback.selectionClick();
+                onPick(opt[0]);
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: selected == opt[0]
+                      ? palette.accent.withValues(alpha: 0.16)
+                      : ladder.containerLow,
+                  borderRadius: BorderRadius.circular(9),
+                  border: Border.all(
+                    color: selected == opt[0]
+                        ? palette.accent
+                        : ladder.hairlineStrong,
+                    width: selected == opt[0] ? 1.2 : 0.8,
+                  ),
+                ),
+                child: Text(
+                  opt[1],
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight:
+                        selected == opt[0] ? FontWeight.w600 : FontWeight.normal,
+                    color: selected == opt[0] ? palette.accent : palette.ink,
+                  ),
                 ),
               ),
-          ],
-        ),
-      );
+            ),
+          ),
+      ],
+    );
+  }
 
-  Widget _switchRow(
-    ThemeData theme,
-    String title,
-    String subtitle,
-    bool value,
-    ValueChanged<bool> onChanged,
-  ) =>
-      SwitchListTile(
-        contentPadding: EdgeInsets.zero,
-        value: value,
-        onChanged: onChanged,
-        title: Text(title, style: const TextStyle(fontSize: 14)),
-        subtitle: Text(subtitle, style: const TextStyle(fontSize: 11.5)),
-        activeThumbColor: theme.colorScheme.primary,
-      );
-
-  Widget _slider(
-    ThemeData theme, {
+  Widget _sliderBlock({
+    required ReadingPalette palette,
     required String label,
+    required String display,
     required double value,
     required double min,
     required double max,
-    required String display,
     int? divisions,
     required ValueChanged<double> onChanged,
-  }) =>
-      Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 13.5,
-                  color: theme.colorScheme.onSurface,
-                ),
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Text(label, style: TextStyle(fontSize: 13.5, color: palette.ink)),
+            const Spacer(),
+            Text(
+              display,
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+                color: palette.accent,
               ),
-              const Spacer(),
-              Text(
-                display,
-                style: TextStyle(
-                  fontSize: 12.5,
-                  color: theme.colorScheme.primary,
-                ),
-              ),
-            ],
-          ),
-          Slider(
-            value: value.clamp(min, max),
-            min: min,
-            max: max,
-            divisions: divisions,
-            activeColor: theme.colorScheme.primary,
-            onChanged: onChanged,
-          ),
-        ],
-      );
-
-  String _thinkingBudgetShortLabel(int budget) {
-    switch (budget) {
-      case 1024:
-        return '轻度 · 1024';
-      case 2048:
-        return '标准 · 2048';
-      case 4096:
-        return '深度 · 4096';
-      case 8192:
-        return '极深 · 8192';
-      case 0:
-      default:
-        return '自由不限';
-    }
-  }
-
-  String _thinkingBudgetDesc(int budget) {
-    switch (budget) {
-      case 1024:
-        return '轻度（1024 tokens）：限制较短思考，适合快速推演';
-      case 2048:
-        return '标准（2048 tokens）：适中思考预算，兼顾深度与响应速度';
-      case 4096:
-        return '深度（4096 tokens）：充裕思考空间，适合复杂剧情推演';
-      case 8192:
-        return '极深（8192 tokens）：最大推理深度，适合宏大格局多线权衡';
-      case 0:
-      default:
-        return '自由不限（默认推荐）：不设预算限制，让模型尽情推演';
-    }
+            ),
+          ],
+        ),
+        Slider(
+          value: value.clamp(min, max),
+          min: min,
+          max: max,
+          divisions: divisions,
+          activeColor: palette.accent,
+          onChanged: onChanged,
+        ),
+      ],
+    );
   }
 }

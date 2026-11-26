@@ -1,17 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:forui/forui.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../models/save_slot.dart';
+import '../themes/app_theme.dart';
+import '../widgets/world_book_cover.dart';
 
-/// 「继续」标签页 —— 我正在经历什么。
-///
-/// 首屏是「继续你的故事」大卡片（最近打开的那一局），
-/// 下面才是全部推演列表。
+/// 「继续」标签页（`forui` 卡片 + 出版物书封 + HCT 阶梯层次）。
 class ContinueTab extends StatelessWidget {
   final List<SaveSlot> slots;
   final String? activeSlotId;
   final ValueChanged<SaveSlot> onOpen;
   final ValueChanged<SaveSlot> onMenu;
   final VoidCallback onNewSession;
+  final VoidCallback? onImportSample;
 
   const ContinueTab({
     super.key,
@@ -20,6 +23,7 @@ class ContinueTab extends StatelessWidget {
     required this.onOpen,
     required this.onMenu,
     required this.onNewSession,
+    this.onImportSample,
   });
 
   SaveSlot? get _active {
@@ -34,215 +38,286 @@ class ContinueTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final palette = AppTheme.readingOf(context);
     final active = _active;
 
     if (slots.isEmpty) {
-      return _empty(theme);
+      return _empty(context, palette);
     }
 
     final others = slots.where((s) => s.id != active?.id).toList();
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 100),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 100),
       children: <Widget>[
-        Text(
-          '继续你的故事',
-          style: TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.w600,
-            color: theme.colorScheme.onSurface,
-          ),
-        ),
-        const SizedBox(height: 14),
-        if (active != null) _activeCard(theme, active),
-        const SizedBox(height: 14),
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton.icon(
-            onPressed: onNewSession,
-            icon: const Icon(Icons.add_rounded, size: 18),
-            label: const Text('开始一段新的推演'),
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 13),
-              side: BorderSide(color: theme.dividerColor),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: <Widget>[
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    '继续推演',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w700,
+                      color: palette.ink,
+                      fontFamilyFallback: AppTheme.serifFontFallback,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '回到你正在经历的世界线',
+                    style: TextStyle(fontSize: 13, color: palette.muted),
+                  ),
+                ],
+              ),
             ),
-          ),
+            FButton.icon(
+              variant: FButtonVariant.outline,
+              size: FButtonSizeVariant.sm,
+              onPress: () {
+                HapticFeedback.lightImpact();
+                onNewSession();
+              },
+              child: const Icon(LucideIcons.plus, size: 18),
+            ),
+          ],
+        ),
+        const SizedBox(height: 18),
+        if (active != null) _activeHeroCard(context, palette, active),
+        const SizedBox(height: 14),
+        FButton(
+          variant: FButtonVariant.outline,
+          prefix: const Icon(LucideIcons.sparkles, size: 16),
+          onPress: () {
+            HapticFeedback.lightImpact();
+            onNewSession();
+          },
+          child: const Text('开启一段新的推演'),
         ),
         if (others.isNotEmpty) ...<Widget>[
-          const SizedBox(height: 28),
-          Text(
-            '最近推演',
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.6,
-              color: theme.colorScheme.primary,
+          const SizedBox(height: 26),
+          FTileGroup(
+            label: Text(
+              '最近推演',
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+                color: palette.muted,
+                letterSpacing: 0.6,
+              ),
             ),
+            children: <FTileMixin>[
+              for (final s in others)
+                FTile(
+                  prefix: WorldBookCover(
+                    book: s.worldBook,
+                    chapterCount: s.chapterCount,
+                    width: 42,
+                    height: 56,
+                    compact: true,
+                  ),
+                  title: Text(
+                    s.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    s.summaryLine,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  suffix: Icon(
+                    LucideIcons.chevronRight,
+                    size: 16,
+                    color: palette.muted,
+                  ),
+                  onPress: () {
+                    HapticFeedback.selectionClick();
+                    onOpen(s);
+                  },
+                  onLongPress: () => onMenu(s),
+                ),
+            ],
           ),
-          const SizedBox(height: 10),
-          for (final s in others) _slotRow(theme, s),
         ],
       ],
     );
   }
 
-  Widget _activeCard(ThemeData theme, SaveSlot slot) {
+  Widget _activeHeroCard(
+    BuildContext context,
+    ReadingPalette palette,
+    SaveSlot slot,
+  ) {
     final ws = slot.worldState;
-    return InkWell(
-      borderRadius: BorderRadius.circular(12),
-      onTap: () => onOpen(slot),
+    return GestureDetector(
       onLongPress: () => onMenu(slot),
-      child: Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: theme.cardColor,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: theme.colorScheme.primary.withValues(alpha: 0.45),
-            width: 1.2,
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text(
-              slot.worldBook.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 17,
-                fontWeight: FontWeight.w600,
-                color: theme.colorScheme.onSurface,
+      child: FCard(
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  WorldBookCover(
+                    book: slot.worldBook,
+                    chapterCount: slot.chapterCount,
+                    width: 78,
+                    height: 108,
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: <Widget>[
+                            FBadge(
+                              variant: FBadgeVariant.secondary,
+                              child: Text('第 ${slot.chapterCount} 幕'),
+                            ),
+                            if (slot.lines.length > 1)
+                              FBadge(
+                                variant: FBadgeVariant.outline,
+                                child: Text(slot.activeLine.name),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          slot.worldBook.name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            height: 1.3,
+                            color: palette.ink,
+                            fontFamilyFallback: AppTheme.serifFontFallback,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        if (ws.inlineSummary.isNotEmpty)
+                          Text(
+                            ws.inlineSummary,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              height: 1.5,
+                              color: palette.muted,
+                            ),
+                          )
+                        else if (slot.worldBook.era.trim().isNotEmpty)
+                          Text(
+                            slot.worldBook.era.trim(),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              color: palette.muted,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  FButton.icon(
+                    variant: FButtonVariant.ghost,
+                    size: FButtonSizeVariant.xs,
+                    onPress: () => onMenu(slot),
+                    child: Icon(
+                      LucideIcons.ellipsis,
+                      size: 18,
+                      color: palette.muted,
+                    ),
+                  ),
+                ],
               ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              <String>[
-                '第 ${slot.chapterCount} 幕',
-                // 有多条世界线时，把当前所在的那条也标出来
-                if (slot.lines.length > 1) slot.activeLine.name,
-              ].join(' · '),
-              style: TextStyle(
-                fontSize: 13,
-                color: theme.colorScheme.primary,
-              ),
-            ),
-            if (ws.inlineSummary.isNotEmpty) ...<Widget>[
-              const SizedBox(height: 4),
-              Text(
-                ws.inlineSummary,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 12.5,
-                  color:
-                      theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                ),
+              const SizedBox(height: 16),
+              FButton(
+                prefix: const Icon(LucideIcons.play, size: 16),
+                onPress: () {
+                  HapticFeedback.lightImpact();
+                  onOpen(slot);
+                },
+                child: const Text('继续进入'),
               ),
             ],
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: <Widget>[
-                Text(
-                  '继续进入',
-                  style: TextStyle(
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w600,
-                    color: theme.colorScheme.primary,
-                  ),
-                ),
-                const SizedBox(width: 4),
-                Icon(
-                  Icons.arrow_forward_rounded,
-                  size: 17,
-                  color: theme.colorScheme.primary,
-                ),
-              ],
-            ),
-          ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _slotRow(ThemeData theme, SaveSlot slot) => Padding(
-        padding: const EdgeInsets.only(bottom: 10),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(10),
-          onTap: () => onOpen(slot),
-          onLongPress: () => onMenu(slot),
-          child: Container(
-            padding: const EdgeInsets.all(15),
-            decoration: BoxDecoration(
-              color: theme.cardColor,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: theme.dividerColor),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  slot.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 14.5,
-                    fontWeight: FontWeight.w600,
-                    color: theme.colorScheme.onSurface,
-                  ),
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  slot.summaryLine,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color:
-                        theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-
-  Widget _empty(ThemeData theme) => Center(
+  Widget _empty(BuildContext context, ReadingPalette palette) => Center(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 40),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: <Widget>[
-              Text(
-                '还没有进行中的推演',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  color: theme.colorScheme.onSurface,
-                ),
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: FCard(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 28, 22, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: palette.accent.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    alignment: Alignment.center,
+                    child: Icon(
+                      LucideIcons.bookOpen,
+                      size: 22,
+                      color: palette.accent,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    '书房里还没有翻开的故事',
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                      color: palette.ink,
+                      fontFamilyFallback: AppTheme.serifFontFallback,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '先挑选或创建一本世界书，也可以一键导入示例世界书立刻开局。',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.65,
+                      color: palette.muted,
+                    ),
+                  ),
+                  const SizedBox(height: 22),
+                  FButton(
+                    prefix: const Icon(LucideIcons.plus, size: 16),
+                    onPress: onNewSession,
+                    child: const Text('开始一段新的推演'),
+                  ),
+                  if (onImportSample != null) ...<Widget>[
+                    const SizedBox(height: 10),
+                    FButton(
+                      variant: FButtonVariant.outline,
+                      prefix: const Icon(LucideIcons.bookmarkPlus, size: 16),
+                      onPress: onImportSample,
+                      child: const Text('一键导入示例《决胜西南1949》'),
+                    ),
+                  ],
+                ],
               ),
-              const SizedBox(height: 10),
-              Text(
-                '先到「世界」里准备一段设定，\n然后就能进入它。',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 13,
-                  height: 1.8,
-                  color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                ),
-              ),
-              const SizedBox(height: 24),
-              FilledButton.icon(
-                onPressed: onNewSession,
-                icon: const Icon(Icons.add_rounded, size: 18),
-                label: const Text('开始一段新的推演'),
-                style: FilledButton.styleFrom(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
-                ),
-              ),
-            ],
+            ),
           ),
         ),
       );

@@ -13,18 +13,19 @@ enum GenEventKind {
   notice,
   restart,
   done,
+  interrupted,
   failed,
 }
 
 class GenEvent {
   final GenEventKind kind;
 
-  /// thoughtDelta / contentDelta 时为文本增量；notice 时为状态提示；failed 时为可读错误。
+  /// thoughtDelta / contentDelta 为文本增量；notice / interrupted / failed 为可读提示。
   final String text;
 
   final ParsedChapter? chapter;
 
-  /// 是否由本地降级产出（内容不完整，但游戏没断流）。
+  /// 是否由本地降级产出。
   final bool degraded;
 
   const GenEvent.thoughtDelta(this.text)
@@ -37,7 +38,6 @@ class GenEvent {
         chapter = null,
         degraded = false;
 
-  /// 兼容别名，等同于 [GenEvent.contentDelta]。
   const GenEvent.delta(this.text)
       : kind = GenEventKind.contentDelta,
         chapter = null,
@@ -48,7 +48,6 @@ class GenEvent {
         chapter = null,
         degraded = false;
 
-  /// 上一轮作废，即将从零开始新一轮 —— UI 必须清空思考与正文缓冲。
   const GenEvent.restart()
       : kind = GenEventKind.restart,
         text = '',
@@ -59,24 +58,34 @@ class GenEvent {
       : kind = GenEventKind.done,
         text = '';
 
+  /// 流式已吐出有效正文后中途断流：绝不清屏重跑，原地保留现场交由用户续写或重试。
+  const GenEvent.interrupted(this.text)
+      : kind = GenEventKind.interrupted,
+        chapter = null,
+        degraded = false;
+
   const GenEvent.failed(this.text)
       : kind = GenEventKind.failed,
         chapter = null,
         degraded = false;
 }
 
-/// 带双轨流隔离与清晰分级兜底的一幕生成器。
+/// 绝不抹屏重写的一幕生成器（v2.0 吸收 Kelivo `retrying_stream.dart` 核心铁律）。
 ///
-/// 策略：
-/// - **配置/鉴权硬错（400 / 401 / 403 / 404）**：立刻以 `failed` 透出真实报文，绝不盲目重试或写入降级章节；
-/// - **网络波动 / 断流 / 5xx / 429**：优先自动重试（不注入训诫词），同时记录最佳残文候选；重试耗尽有充足残文时终极抢救，否则以 `failed` 保留现场；
-/// - **契约违背（拒答 / 空正文 / 缺分支）**：正向改写重试（最多 2 次）；若正文充足仅缺 `<choices>` 直接补齐分支结算；彻底无响应时才进入本地降级。
+/// 铁律：
+/// 1. **永不误杀台词**：彻底删除流式阶段靠「抱歉/对不起/我不能」关键词掐流重跑的缺陷；
+/// 2. **已吐字绝不清屏（`if (yieldedBody) interrupt`）**：
+///    - 仅在 **0 字节首帧前** 遇到临时网络/5xx/429 或全空响应时静默重试；
+///    - 一旦已经向屏幕吐出正文，遇到网络波动或超时 **绝不发 `restart` 抹屏**，而是立刻发射
+///      [GenEvent.interrupted] 原地保留所有文字，由用户决定「继续生成 / 重新生成 / 直接保存」；
+/// 3. **正文绝对优先**：流式正常结束时，只要解析出非空正文（哪怕缺 `<choices>` 或 `<date>`），
+///    直接成幕落盘，绝不为了少一个标签就把玩家等出来的千字正文全部作废！
 class FallbackService {
   FallbackService(this.client);
 
   final LlmClient client;
 
-  static const int _maxRetries = 2;
+  static const int _maxPreBodyRetries = 1;
 
   Stream<GenEvent> generate({
     required AppConfig config,
@@ -89,6 +98,7 @@ class FallbackService {
     String chronicle = '',
     String worldState = '',
     bool? godMode,
+    bool? lightweightContract,
   }) async* {
     final isGod = godMode ?? config.godMode;
     final systemPrompt = PromptBuilder.buildSystemPrompt(
@@ -98,32 +108,18 @@ class FallbackService {
       chronicle: chronicle,
       worldState: worldState,
       godMode: isGod,
+      lightweightContract: lightweightContract,
     );
 
     AppError? lastError;
-    var contractNudgeCount = 0;
-    ParsedChapter? bestSalvage;
 
-    for (var attempt = 0; attempt <= _maxRetries; attempt++) {
+    for (var attempt = 0; attempt <= _maxPreBodyRetries; attempt++) {
       if (client.isCancelled) {
         yield const GenEvent.failed('已中止。');
         return;
       }
 
-      if (attempt > 0) {
-        yield const GenEvent.restart();
-        if (contractNudgeCount > 0) {
-          yield GenEvent.notice('输出未满足契约，正在改写重试（第 $attempt 次）…');
-        } else {
-          yield GenEvent.notice('网络波动中断，正在重新连接重试（第 $attempt 次）…');
-        }
-      }
-      RuntimeLog.i('Fallback', '尝试 ${attempt + 1}/${_maxRetries + 1}');
-
-      // 网络重试严禁注入训诫词；仅契约违背或拒答时注入
-      final nudge = contractNudgeCount > 0
-          ? PromptBuilder.retryNudge(contractNudgeCount)
-          : '';
+      final nudge = attempt > 0 ? PromptBuilder.retryNudge(attempt) : '';
       final messages = PromptBuilder.buildMessages(
         systemPrompt: systemPrompt + nudge,
         history: history,
@@ -133,7 +129,6 @@ class FallbackService {
 
       final thoughtBuf = StringBuffer();
       final contentBuf = StringBuffer();
-      var abortedEarly = false;
 
       try {
         await for (final chunk in client.streamChunks(
@@ -147,13 +142,7 @@ class FallbackService {
             yield GenEvent.thoughtDelta(chunk.text);
             continue;
           }
-
           contentBuf.write(chunk.text);
-          final sofar = contentBuf.toString();
-          if (sofar.length < 160 && ResponseParser.looksLikeRefusal(sofar)) {
-            abortedEarly = true;
-            break;
-          }
           yield GenEvent.contentDelta(chunk.text);
         }
       } on AppError catch (e) {
@@ -168,58 +157,38 @@ class FallbackService {
               '${e.detail == null ? '' : ' · ${e.detail}'}',
         );
 
-        // 配置/鉴权硬错立刻退出，绝不重试
+        // 配置/鉴权硬错立刻透出真实报文，绝不重试
         if (e.isConfigError) {
-          yield const GenEvent.restart();
+          if (contentBuf.isEmpty && thoughtBuf.isEmpty) {
+            yield const GenEvent.restart();
+          }
           yield GenEvent.failed(e.message);
           return;
         }
 
-        // 记录当前轮次可抢救的最佳残文
-        final salvageCandidate = buildSalvageCandidate(
-          content: contentBuf.toString(),
-          thought: thoughtBuf.toString(),
-        );
-        if (salvageCandidate != null &&
-            (bestSalvage == null ||
-                salvageCandidate.body.length > bestSalvage.body.length)) {
-          bestSalvage = salvageCandidate;
-        }
-
-        // 网络/服务端可重试错误：优先自动重连发起完整推演
-        if (e.retryable && attempt < _maxRetries) {
-          if (contentBuf.isNotEmpty || thoughtBuf.isNotEmpty) {
-            yield const GenEvent.restart();
-          }
-          yield GenEvent.notice(
-            '${e.message} 正在重新连接并完整推演（第 ${attempt + 2} 次）…',
-          );
-          continue;
-        }
-
-        // 重试机会耗尽：若有充足残文，执行终极抢救
-        if (bestSalvage != null) {
+        // 核心铁律：只要已经吐出过正文，绝不抹屏重来！直接原地保留并进入可续写中断态。
+        final hasVisibleBody =
+            ResponseParser.previewBody(contentBuf.toString()).trim().isNotEmpty;
+        if (hasVisibleBody) {
           RuntimeLog.i(
             'Fallback',
-            '重试耗尽但正文充足（${bestSalvage.body.length} 字），启动终极残文抢救',
+            '已吐出正文（${contentBuf.length} 字）后断流，严格原地保留现场并转入可续写态',
           );
-          yield const GenEvent.notice('网络多次波动中断，已为您抢救保存当前幕推演。');
-          yield GenEvent.done(bestSalvage);
+          yield GenEvent.interrupted('${e.message}（已完整保留上方正文）');
           return;
         }
 
-        break;
-      }
-
-      if (abortedEarly) {
-        RuntimeLog.w('Fallback', '第 ${attempt + 1} 轮早停（疑似拒答）');
-        lastError = const AppError(AppErrorKind.refused, '模型回避了这一段的推演。');
-        contractNudgeCount++;
-        if (attempt < _maxRetries) {
+        // 尚未吐出任何正文：允许在重试额度内干净重连（绝不抹掉读者正在看的内容）
+        if (e.retryable && attempt < _maxPreBodyRetries) {
           yield const GenEvent.restart();
-          yield const GenEvent.notice('模型回避了这一段的推演，正在改写重试…');
+          yield GenEvent.notice('${e.message} 正在重新连接（第 ${attempt + 2} 次）…');
+          continue;
         }
-        continue;
+
+        yield GenEvent.failed(
+          '${e.message}\n推演尚未产出正文，已保留当前现场与选项，请检查网络或配置后重试。',
+        );
+        return;
       }
 
       final contentRaw = contentBuf.toString();
@@ -231,115 +200,123 @@ class FallbackService {
 
       RuntimeLog.i(
         'Fallback',
-        '第 ${attempt + 1} 轮结束：正文 ${parsed.body.length} 字 · '
+        '第 ${attempt + 1} 轮完成：正文 ${parsed.body.length} 字 · '
             '思考 ${parsed.thought.length} 字 · 分支 ${parsed.choices.length} 条',
       );
 
-      if (parsed.body.trim().isEmpty) {
-        lastError = const AppError(AppErrorKind.refused, '模型返回了空内容。');
-        contractNudgeCount++;
-        if (attempt < _maxRetries) {
-          yield const GenEvent.restart();
-          yield const GenEvent.notice('模型返回了空内容，正在重试…');
-        }
-        continue;
+      // 只要有非空正文，立刻正常落幕！绝不因为缺少 <choices> 或字数偏短就清屏重来！
+      if (parsed.body.trim().isNotEmpty) {
+        yield GenEvent.done(parsed);
+        return;
       }
 
-      if (!parsed.hasUsableChoices) {
-        final salvaged = buildSalvageCandidate(
-          content: contentRaw,
-          thought: thoughtRaw,
-          allowWithoutDate: parsed.body.trim().length >= 300,
-        );
-        if (salvaged != null) {
-          RuntimeLog.i(
-            'Fallback',
-            '正文充足（${salvaged.body.length} 字）但缺分支，自动补齐稳妥选项结算',
-          );
-          yield GenEvent.done(salvaged);
-          return;
-        }
-
-        lastError = const AppError(
-          AppErrorKind.truncated,
-          '输出缺少决断分支（<choices>）。',
-        );
-        contractNudgeCount++;
-        if (attempt < _maxRetries) {
-          yield const GenEvent.restart();
-          yield const GenEvent.notice('输出缺少决断分支，正在重试…');
-        }
+      // 全空正文（屏幕此时本来为空）：允许改写重试一次
+      lastError = const AppError(AppErrorKind.refused, '模型返回了空正文。');
+      if (attempt < _maxPreBodyRetries) {
+        yield const GenEvent.restart();
+        yield const GenEvent.notice('模型未输出正文，正在重试…');
         continue;
       }
-
-      yield GenEvent.done(parsed);
-      return;
     }
 
-    // ---- 兜底收尾 ----
     final err = lastError ??
-        const AppError(AppErrorKind.unknown, '生成失败，原因未知。');
-    RuntimeLog.e('Fallback', '兜底处理：${err.kind.name} · ${err.message}');
-
-    if (err.isConfigError) {
-      yield const GenEvent.restart();
-      yield GenEvent.failed(err.message);
-      return;
-    }
-
-    if (err.kind == AppErrorKind.network ||
-        err.kind == AppErrorKind.server ||
-        err.kind == AppErrorKind.rateLimit) {
-      yield GenEvent.failed(
-        '${err.message}\n推演未能完整落定，已保留当前现场与选项，请稍后重试。',
-      );
-      return;
-    }
-
-    // 仅在反复拒答/空返回时走本地降级，确保故事不断流
-    yield const GenEvent.restart();
-    yield GenEvent.notice(
-      '${err.message}\n可尝试在设置里更换模型或服务商，或点击「重新生成本幕」。',
-    );
-    yield GenEvent.done(
-      ParsedChapter(
-        body: _localDegradedBody(playerAction, book),
-        date: '',
-        choices: const <String>[
-          '重新生成本幕（调整模型或参数后重试）',
-          '换一种行动表述重新推演',
-        ],
-      ),
-      degraded: true,
-    );
+        const AppError(AppErrorKind.unknown, '推演未能取得有效正文，请检查模型配置或稍后重试。');
+    RuntimeLog.e('Fallback', '最终失败：${err.kind.name} · ${err.message}');
+    yield GenEvent.failed(err.message);
   }
 
-  /// 判断残文是否具备抢救价值，并补全缺失的决断选项。
+  /// 断流原地续写（Continue）：紧接已有残文无缝流式补完剩余剧情与分支。
+  Stream<GenEvent> continueGenerate({
+    required AppConfig config,
+    required String apiKey,
+    required WorldBook book,
+    required List<ChapterNode> history,
+    required String playerAction,
+    required String existingContent,
+    required String existingThought,
+    String? workspaceId,
+    String frameworkOverride = '',
+    String chronicle = '',
+    String worldState = '',
+    bool? godMode,
+    bool? lightweightContract,
+  }) async* {
+    final isGod = godMode ?? config.godMode;
+    final systemPrompt = PromptBuilder.buildSystemPrompt(
+      config: config,
+      book: book,
+      frameworkOverride: frameworkOverride,
+      chronicle: chronicle,
+      worldState: worldState,
+      godMode: isGod,
+      lightweightContract: lightweightContract,
+    );
+
+    final messages = PromptBuilder.buildContinueMessages(
+      systemPrompt: systemPrompt,
+      history: history,
+      playerAction: playerAction,
+      partialContent: existingContent,
+      godMode: isGod,
+    );
+
+    final addedThought = StringBuffer();
+    final addedContent = StringBuffer();
+
+    try {
+      await for (final chunk in client.streamChunks(
+        config: config,
+        apiKey: apiKey,
+        messages: messages,
+        workspaceId: workspaceId,
+      )) {
+        if (chunk.isThought) {
+          addedThought.write(chunk.text);
+          yield GenEvent.thoughtDelta(chunk.text);
+          continue;
+        }
+        addedContent.write(chunk.text);
+        yield GenEvent.contentDelta(chunk.text);
+      }
+    } on AppError catch (e) {
+      if (e.kind == AppErrorKind.cancelled) {
+        yield const GenEvent.interrupted('已暂停续写（已保留当前全部正文）');
+        return;
+      }
+      yield GenEvent.interrupted('${e.message}（已保留当前全部正文）');
+      return;
+    }
+
+    final mergedContent = existingContent + addedContent.toString();
+    final mergedThought = <String>[
+      if (existingThought.trim().isNotEmpty) existingThought.trim(),
+      if (addedThought.toString().trim().isNotEmpty)
+        addedThought.toString().trim(),
+    ].join('\n\n');
+
+    final parsed = ResponseParser.parseChannels(
+      content: mergedContent,
+      thought: mergedThought,
+    );
+    if (parsed.body.trim().isNotEmpty) {
+      yield GenEvent.done(parsed);
+    } else {
+      yield const GenEvent.interrupted('续写未返回新内容，已保留先前现场。');
+    }
+  }
+
+  /// 判断残文是否具备落盘价值（保留兼容方法，供外部直接抢救/单测调用）。
   static ParsedChapter? buildSalvageCandidate({
     required String content,
     required String thought,
-    bool allowWithoutDate = false,
+    bool allowWithoutDate = true,
   }) {
     if (content.trim().isEmpty) return null;
     final parsed = ResponseParser.parseChannels(
       content: content,
       thought: thought,
     );
-    final hasDate = parsed.date.isNotEmpty ||
-        RegExp(r'[<＜《]\s*date\s*[>＞》]', caseSensitive: false).hasMatch(content);
-    final bodyLen = parsed.body.trim().length;
-    if (bodyLen < 200) return null;
-    if (!hasDate && !allowWithoutDate) return null;
-
-    final choices = List<String>.from(parsed.choices);
-    if (choices.isEmpty) {
-      choices.addAll(const <String>[
-        '继续深入探查眼下局势',
-        '按兵不动，静观其变',
-      ]);
-    } else if (choices.length == 1) {
-      choices.add('按兵不动，静观其变');
-    }
+    if (parsed.body.trim().isEmpty) return null;
 
     final salvagedDate = parsed.date.isNotEmpty
         ? parsed.date
@@ -352,22 +329,12 @@ class FallbackService {
     return ParsedChapter(
       body: parsed.body,
       date: salvagedDate,
-      choices: choices,
+      choices: List<String>.from(parsed.choices),
       glossary: parsed.glossary,
       cast: parsed.cast,
       stateRaw: parsed.stateRaw,
       thought: parsed.thought,
       rawOutput: parsed.rawOutput,
     );
-  }
-
-  String _localDegradedBody(String playerAction, WorldBook book) {
-    final actionText =
-        playerAction.trim().isEmpty ? '（开局起笔）' : '「${playerAction.trim()}」';
-    return '（本地降级模式 · 模型连续未能输出有效推演）\n\n'
-        '你在《${book.name}》中做出了如下决定：\n\n'
-        '$actionText\n\n'
-        '这一决定已记入编年史，本幕的推演正文尚未生成。'
-        '待接口或模型调整后，点击菜单中的「重新生成本幕」即可补齐。';
   }
 }
