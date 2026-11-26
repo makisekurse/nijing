@@ -57,6 +57,15 @@ Future<AppConfig> _loadConfig() async {
   //
   // 用标记位保证**只迁一次**：之后用户在设置里怎么选就怎么算，
   // 不会每次启动都被强行改回去。
+  // 迁移旧版独立存放的百炼 workspaceId 到 AppConfig
+  if (config.workspaceId.trim().isEmpty) {
+    final legacyWs = (await PrefsStore.getString('nijing_workspace_id')) ?? '';
+    if (legacyWs.trim().isNotEmpty) {
+      config = config.copyWith(workspaceId: legacyWs.trim());
+      await PrefsStore.setString(kConfigKey, config.encode());
+    }
+  }
+
   final migrated = (await PrefsStore.getString(kThemeMigratedKey)) == 'done';
   if (!migrated) {
     config = config.copyWith(themeMode: AppTheme.defaultId);

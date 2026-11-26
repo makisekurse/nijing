@@ -11,7 +11,10 @@ class AppConfig {
   /// 自定义端点（provider 为 custom 时必填；其余留空走默认端点）
   String baseUrl;
 
-  /// 默认用 flash —— 便宜、快，长局推演不容易烧额度。
+  /// 阿里云百炼业务空间 ID（仅 bailian 可选填；统一收口到配置中，避免测试连接与实际推演分裂）
+  String workspaceId;
+
+  /// 当前选用的模型代码
   String modelName;
 
   double temperature;
@@ -28,18 +31,12 @@ class AppConfig {
   double lineHeight;
 
   /// 段首缩进格数（0 / 1 / 2）。
-  ///
-  /// 以前是个布尔开关（首行缩进 开/关），但中文排版里"缩几格"才是真正
-  /// 要调的参数，所以改成可选的格数。
   int paragraphIndent;
 
   /// 段间距：'tight' | 'normal' | 'loose'
   String paragraphSpacing;
 
   /// 打开推演时自动跳到最新一幕。
-  ///
-  /// 「继续进入」的语义就是**接着上次的进度往下**，
-  /// 所以默认开 —— 否则从首页点进来会停在第一幕，得手动往下翻。
   bool autoScrollToLatest;
 
   /// 顶栏自动隐藏（零 HUD）
@@ -66,9 +63,10 @@ class AppConfig {
   AppConfig({
     this.apiProvider = 'bailian',
     this.baseUrl = '',
-    this.modelName = 'qwen3.8-flash',
+    this.workspaceId = '',
+    this.modelName = 'qwen-plus',
     this.temperature = 0.85,
-    int maxWords = 500,
+    int maxWords = 800,
     this.themeMode = 'mirage',
     this.fontSize = 'md',
     this.lineHeight = 1.9,
@@ -87,6 +85,7 @@ class AppConfig {
   Map<String, dynamic> toJson() => <String, dynamic>{
         'apiProvider': apiProvider,
         'baseUrl': baseUrl,
+        'workspaceId': workspaceId,
         'modelName': modelName,
         'temperature': temperature,
         'maxWords': maxWords,
@@ -108,13 +107,13 @@ class AppConfig {
   factory AppConfig.fromJson(Map<String, dynamic> json) => AppConfig(
         apiProvider: (json['apiProvider'] ?? 'bailian').toString(),
         baseUrl: (json['baseUrl'] ?? '').toString(),
-        modelName: (json['modelName'] ?? 'qwen3.8-flash').toString(),
+        workspaceId: (json['workspaceId'] ?? '').toString(),
+        modelName: (json['modelName'] ?? 'qwen-plus').toString(),
         temperature: (json['temperature'] as num?)?.toDouble() ?? 0.85,
-        maxWords: ((json['maxWords'] as num?)?.toInt() ?? 500).clamp(200, 3000),
+        maxWords: ((json['maxWords'] as num?)?.toInt() ?? 800).clamp(200, 3000),
         themeMode: (json['themeMode'] ?? 'mirage').toString(),
         fontSize: (json['fontSize'] ?? 'md').toString(),
         lineHeight: (json['lineHeight'] as num?)?.toDouble() ?? 1.9,
-        // 旧配置里是布尔 `indentFirstLine`：开 → 两格，关 → 顶格
         paragraphIndent: (json['paragraphIndent'] as num?)?.toInt() ??
             (json['indentFirstLine'] == false ? 0 : 2),
         paragraphSpacing: (json['paragraphSpacing'] ?? 'normal').toString(),
@@ -131,6 +130,7 @@ class AppConfig {
   AppConfig copyWith({
     String? apiProvider,
     String? baseUrl,
+    String? workspaceId,
     String? modelName,
     double? temperature,
     int? maxWords,
@@ -151,6 +151,7 @@ class AppConfig {
       AppConfig(
         apiProvider: apiProvider ?? this.apiProvider,
         baseUrl: baseUrl ?? this.baseUrl,
+        workspaceId: workspaceId ?? this.workspaceId,
         modelName: modelName ?? this.modelName,
         temperature: temperature ?? this.temperature,
         maxWords: (maxWords ?? this.maxWords).clamp(200, 3000),

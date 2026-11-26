@@ -1512,11 +1512,11 @@ facts: 甲; 乙
     });
 
     test('LlmClient · 根据 maxWords 动态配置充足缓冲的 max_tokens', () {
-      expect(LlmClient.calculateMaxTokens(300), 2048); // 300 * 3 = 900 -> clamp 保底 2048
-      expect(LlmClient.calculateMaxTokens(500), 2048); // 500 * 3 = 1500 -> clamp 保底 2048
-      expect(LlmClient.calculateMaxTokens(800), 2400); // 800 * 3 = 2400
-      expect(LlmClient.calculateMaxTokens(1000), 3000); // 1000 * 3 = 3000
-      expect(LlmClient.calculateMaxTokens(1200), 3600); // 1200 * 3 = 3600
+      expect(LlmClient.calculateMaxTokens(300), 4096); // 保底 4096 防截断
+      expect(LlmClient.calculateMaxTokens(500), 4096);
+      expect(LlmClient.calculateMaxTokens(800), 4096);
+      expect(LlmClient.calculateMaxTokens(1500), 4500);
+      expect(LlmClient.calculateMaxTokens(3000), 9000);
     });
 
     test('GameSession.appendChapter · 主宰模式事实状态一致性与防逆向误判保障', () {
@@ -1896,12 +1896,10 @@ final x = 1;
     });
   });
 
-  group('v1.3.4 · ResponseParser 未闭合 think 自然叙事正文特征与段落断崖探测', () {
-    test('未闭合 think 后接文学正文与 choices：文学正文绝不被吞入思考', () {
-      const raw = '''
-<think>
-我们来推演一下这一幕的走向。主角需要面临生死考验，剧情必须在这里收紧节奏。
-
+  group('v1.3.4 · ResponseParser 未闭合 think 与双轨边界隔离', () {
+    test('双轨 parseChannels 下文学正文与 choices 绝对零污染', () {
+      const thought = '我们来推演一下这一幕的走向。主角需要面临生死考验，剧情必须在这里收紧节奏。';
+      const content = '''
 夜色深沉，寒风如刀割般刮过脸颊。
 林砚握紧了手中的短刀，屏息凝神，倾听着门外由远及近的脚步声。
 “掌柜的，北边来人了。”伙计压低嗓音，额头上布满冷汗。
@@ -1911,7 +1909,7 @@ final x = 1;
 2. 藏入暗格，静观其变
 </choices>
 ''';
-      final p = ResponseParser.parse(raw);
+      final p = ResponseParser.parseChannels(content: content, thought: thought);
       expect(p.thought, contains('推演一下这一幕的走向'));
       expect(p.thought, isNot(contains('夜色深沉')));
       expect(p.body, contains('夜色深沉，寒风如刀割般刮过脸颊。'));
@@ -1921,10 +1919,11 @@ final x = 1;
       expect(p.hasUsableChoices, isTrue);
     });
 
-    test('未闭合 think 后接对话引号“...”：自动断崖截断', () {
+    test('未闭合 think 后接 <date> 结构标签：精准截断且正文不被吞入思考', () {
       const raw = '''
 <think>
 分析局势：主角决定直接对质。
+<date>崇祯二年冬</date>
 “你到底是谁？”他冷冷质问。对方并未回答，只是缓缓拔出了腰间的长剑。
 <choices>
 迎战
@@ -1934,6 +1933,7 @@ final x = 1;
       final p = ResponseParser.parse(raw);
       expect(p.thought, contains('分析局势'));
       expect(p.thought, isNot(contains('你到底是谁')));
+      expect(p.date, '崇祯二年冬');
       expect(p.body, contains('“你到底是谁？”他冷冷质问。'));
       expect(p.choices.length, 2);
     });
@@ -1989,11 +1989,9 @@ final x = 1;
       expect(bodyExpOpen, '', reason: '流式未闭合前即使包含正文前缀也绝不泄漏');
     });
 
-    test('未闭合 think 后接短句氛围开篇（如「夜色深沉。」）：短句绝不被吞入思考', () {
-      const raw = '''
-<think>
-推演思路：安排主角在风雪中抵达客栈。
-
+    test('双轨 parseChannels 下短句氛围开篇（如「夜色深沉。」）完整保留为正文', () {
+      const thought = '推演思路：安排主角在风雪中抵达客栈。';
+      const content = '''
 夜色深沉。
 
 林远推开客栈厚重的木门，风雪呼啸着涌入大堂。
@@ -2003,7 +2001,7 @@ final x = 1;
 2. 拔剑警戒
 </choices>
 ''';
-      final p = ResponseParser.parse(raw);
+      final p = ResponseParser.parseChannels(content: content, thought: thought);
       expect(p.thought, contains('推演思路'));
       expect(p.thought, isNot(contains('夜色深沉。')));
       expect(p.body, contains('夜色深沉。'));
@@ -2011,11 +2009,9 @@ final x = 1;
       expect(p.choices.length, 2);
     });
 
-    test('未闭合 think 后接人物对话中出现动机/局势等词：对话绝不被误判为思考', () {
-      const raw = '''
-<think>
-梳理当前冲突矛盾。
-
+    test('双轨 parseChannels 下人物对话中出现动机/局势等词绝不被误判为思考', () {
+      const thought = '梳理当前冲突矛盾。';
+      const content = '''
 “当务之急是弄清他的动机。”林砚低声道，“局势对我们极为不利，必须步步为营。”
 
 <choices>
@@ -2023,7 +2019,7 @@ final x = 1;
 2. 调动守卫
 </choices>
 ''';
-      final p = ResponseParser.parse(raw);
+      final p = ResponseParser.parseChannels(content: content, thought: thought);
       expect(p.thought, contains('梳理当前冲突矛盾'));
       expect(p.thought, isNot(contains('当务之急是弄清他的动机')));
       expect(p.body, contains('“当务之急是弄清他的动机。”'));
@@ -2073,8 +2069,8 @@ final x = 1;
 
     test('LlmClient.calculateMaxTokens 支持 3000 字上限，分配充足缓冲 9000 tokens', () {
       expect(LlmClient.calculateMaxTokens(3000), 9000);
-      expect(LlmClient.calculateMaxTokens(1200), 3600);
-      expect(LlmClient.calculateMaxTokens(500), 2048);
+      expect(LlmClient.calculateMaxTokens(1500), 4500);
+      expect(LlmClient.calculateMaxTokens(500), 4096);
     });
 
     test('AppConfig 支持 3000 字并在 fromJson 与 copyWith 中 clamp 到 3000', () {
@@ -2160,7 +2156,7 @@ final x = 1;
       final lastThree = events.sublist(events.length - 3);
       expect(lastThree[0].kind, GenEventKind.restart);
       expect(lastThree[1].kind, GenEventKind.notice);
-      expect(lastThree[1].text, contains('换一个模型或换一家服务商'));
+      expect(lastThree[1].text, contains('更换模型或服务商'));
       expect(lastThree[2].kind, GenEventKind.done);
       expect(lastThree[2].degraded, isTrue);
     });
@@ -2168,13 +2164,13 @@ final x = 1;
 
   group('v1.3.5 · 400错误根治、日志真实文件分享与视口停泊', () {
     test('Providers · 思考模式与参数隔离精确判定', () {
-      // 真正支持思考开关的推理模型
+      // 百炼支持思考开关的模型
       expect(Providers.supportsThinkingSwitch('qwen3.8-flash'), isTrue);
       expect(Providers.supportsThinkingSwitch('Qwen3-Max'), isTrue);
       expect(Providers.supportsThinkingSwitch('qwq-32b-preview'), isTrue);
-      // 普通模型绝不判定为支持思考开关
-      expect(Providers.supportsThinkingSwitch('qwen-plus'), isFalse);
-      expect(Providers.supportsThinkingSwitch('qwen-turbo'), isFalse);
+      expect(Providers.supportsThinkingSwitch('qwen-plus'), isTrue);
+      expect(Providers.supportsThinkingSwitch('qwen-turbo'), isTrue);
+      // 不支持百炼思考开关的模型
       expect(Providers.supportsThinkingSwitch('qwen-max'), isFalse);
       expect(Providers.supportsThinkingSwitch('deepseek-chat'), isFalse);
 
@@ -2188,7 +2184,7 @@ final x = 1;
         isTrue,
       );
       expect(
-        Providers.supportsThinkingParameter(apiProvider: 'bailian', modelName: 'qwen-plus'),
+        Providers.supportsThinkingParameter(apiProvider: 'bailian', modelName: 'qwen-max'),
         isFalse,
       );
       expect(
@@ -2220,30 +2216,18 @@ final x = 1;
       expect(Providers.normalizeModelName('deepseekchat'), 'deepseek-chat');
       expect(Providers.normalizeModelName('DeepSeek-Chat'), 'deepseek-chat');
       expect(Providers.normalizeModelName('deepseekreasoner'), 'deepseek-reasoner');
-      expect(Providers.normalizeModelName('qwq32b'), 'qwq-32b-preview');
-      expect(Providers.normalizeModelName('qwq-32b-preview'), 'qwq-32b-preview');
+      expect(Providers.normalizeModelName('qwq32b'), 'qwq-32b');
+      expect(Providers.normalizeModelName('qwq-plus'), 'qwq-plus');
     });
 
-    test('LlmClient.calculateMaxTokens · 模型硬限与安全上限', () {
-      // 阿里云百炼 qwen-turbo 硬限 [1, 1500]
-      expect(LlmClient.calculateMaxTokens(3000, modelName: 'qwen-turbo'), 1500);
-      expect(LlmClient.calculateMaxTokens(3000, modelName: 'qwenturbo'), 1500);
-
-      // 阿里云百炼 qwen-plus & qwen-max 硬限 [1, 2000]
-      expect(LlmClient.calculateMaxTokens(3000, modelName: 'qwen-plus'), 2000);
-      expect(LlmClient.calculateMaxTokens(3000, modelName: 'qwenplus'), 2000);
-      expect(LlmClient.calculateMaxTokens(3000, modelName: 'qwen-max'), 2000);
-      expect(LlmClient.calculateMaxTokens(3000, modelName: 'qwenmax'), 2000);
-      expect(LlmClient.calculateMaxTokens(800, modelName: 'qwen-plus'), 2000);
-      expect(LlmClient.calculateMaxTokens(300, modelName: 'qwen-plus'), 900);
-
-      // DeepSeek 4096 上限
-      expect(LlmClient.calculateMaxTokens(3000, provider: 'deepseek'), 4096);
-      expect(LlmClient.calculateMaxTokens(3000, modelName: 'deepseek-chat'), 4096);
-
-      // 普通推理模型支持充足缓冲
-      expect(LlmClient.calculateMaxTokens(3000, modelName: 'qwen3.8-flash'), 9000);
-      expect(LlmClient.calculateMaxTokens(3000, modelName: 'qwen3.8flash'), 9000);
+    test('LlmClient.calculateMaxTokens · 解除过时硬限，保障长文本不断章', () {
+      expect(LlmClient.calculateMaxTokens(3000, modelName: 'qwen-turbo'), 9000);
+      expect(LlmClient.calculateMaxTokens(3000, modelName: 'qwen-plus'), 9000);
+      expect(LlmClient.calculateMaxTokens(3000, modelName: 'qwen-max'), 9000);
+      expect(LlmClient.calculateMaxTokens(3000, provider: 'deepseek'), 9000);
+      expect(LlmClient.calculateMaxTokens(3000, modelName: 'deepseek-chat'), 9000);
+      expect(LlmClient.calculateMaxTokens(3000, modelName: 'deepseek-reasoner'), 16384);
+      expect(LlmClient.calculateMaxTokens(3000, modelName: 'qwen3.8-flash'), 12288);
       expect(LlmClient.calculateMaxTokens(3000), 9000);
     });
 
@@ -2261,7 +2245,7 @@ final x = 1;
 
       // 非 JSON / 纯文本 400 兜底
       final err3 = AppError.fromStatus(400, 'Bad Request');
-      expect(err3.message, contains('多为模型名不存在、单幕字数超限或参数不合法'));
+      expect(err3.message, contains('多为模型名不存在'));
     });
 
     test('FileExportService · shareFile 原生调用安全不崩溃', () async {
@@ -2426,7 +2410,7 @@ final x = 1;
       await tester.pump();
 
       // 向上拖动内容（视口向上停泊回看）
-      await tester.drag(find.byType(ListView), const Offset(0, 500));
+      await tester.drag(find.byType(CustomScrollView), const Offset(0, 500));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
 
@@ -2462,15 +2446,14 @@ final x = 1;
     });
 
     test('v1.3.7 · 深度思考顶格 Token 扩容：保底 12288，上限拉满 16384', () {
-      // 开启思考模式下：保底 12288，即使是 1000/1400 字也直接给到 12288
       expect(LlmClient.calculateMaxTokens(1000, enableThinking: true), 12288);
       expect(LlmClient.calculateMaxTokens(1400, enableThinking: true), 12288);
-      // 3000 字上限时：拉满到 15000 / 16384 边界
-      expect(LlmClient.calculateMaxTokens(3000, enableThinking: true), 15000);
-      // 普通模式保持原样，不干扰旧逻辑
+      expect(LlmClient.calculateMaxTokens(3000, enableThinking: true), 12288);
       expect(LlmClient.calculateMaxTokens(1400, enableThinking: false), 4200);
-      // 百炼硬限模型不受 enableThinking 干扰，保持安全区间
-      expect(LlmClient.calculateMaxTokens(1400, modelName: 'qwen-plus', enableThinking: true), 2000);
+      expect(
+        LlmClient.calculateMaxTokens(1400, modelName: 'qwen-plus', enableThinking: true),
+        12288,
+      );
     });
 
     test('v1.3.7 · 思考过程包含引号指令与脑暴时绝不外泄至正文', () {
@@ -2526,11 +2509,11 @@ final x = 1;
 
         final highWords =
             LlmClient.calculateMaxTokens(3000, enableThinking: true);
-        expect(highWords, 15000);
+        expect(highWords, 12288);
 
         final extremeWords =
             LlmClient.calculateMaxTokens(4000, enableThinking: true);
-        expect(extremeWords, 16384);
+        expect(extremeWords, 16000);
       });
 
       test('ResponseParser.splitLive · 未闭合 think 零泄漏（无下一结构标签或正文前缀时全文归思考，正文为空）', () {
@@ -2645,7 +2628,7 @@ final x = 1;
         final failedEvents =
             events.where((e) => e.kind == GenEventKind.failed).toList();
         expect(failedEvents.length, 1);
-        expect(failedEvents.first.text, contains('网络连接中断'));
+        expect(failedEvents.first.text, contains('已保留当前现场与选项'));
       });
 
       test('ResponseParser.splitLive · 思考过程中包含 markdown 分割线 --- 绝不切出正文（正文保持为空）', () {
@@ -2813,11 +2796,11 @@ final x = 1;
 
 class _MockAlwaysFailClient extends LlmClient {
   @override
-  Stream<String> streamChat({
+  Stream<LlmChunk> streamChunks({
     required AppConfig config,
     required String apiKey,
     required List<Map<String, String>> messages,
-    String workspaceId = '',
+    String? workspaceId,
   }) async* {
     throw const AppError(AppErrorKind.refused, '模型回避了这一段的推演。');
   }
@@ -2825,11 +2808,11 @@ class _MockAlwaysFailClient extends LlmClient {
 
 class _Mock400AuthFailClient extends LlmClient {
   @override
-  Stream<String> streamChat({
+  Stream<LlmChunk> streamChunks({
     required AppConfig config,
     required String apiKey,
     required List<Map<String, String>> messages,
-    String workspaceId = '',
+    String? workspaceId,
   }) async* {
     throw AppError.fromStatus(
       400,
@@ -2840,18 +2823,20 @@ class _Mock400AuthFailClient extends LlmClient {
 
 class _MockNetworkInterruptWithPartialChapterClient extends LlmClient {
   @override
-  Stream<String> streamChat({
+  Stream<LlmChunk> streamChunks({
     required AppConfig config,
     required String apiKey,
     required List<Map<String, String>> messages,
-    String workspaceId = '',
+    String? workspaceId,
   }) async* {
-    yield '<date>建中元年冬</date>\n\n';
-    yield '林远踏入风雪客栈。堂内火炉噼啪作响，店小二热情地迎上前来：“客官打尖还是住店？”'
-        '林远解下披风，拍去上面的积雪，环顾四周。客栈角落里坐着几名按刀的行商，目光阴郁；'
-        '柜台后的掌柜拨弄着算盘，神色警惕。风雪撞击着窗棂，夜色愈发深沉。远处的山道上隐隐传来阵阵狼嗥，'
-        '似乎今夜注定不太平静。他缓缓走向大堂中央的空桌，心中暗自盘算着接下来的去向与接头暗号。'
-        '门外的风声愈发尖锐，夹杂着马蹄的踏雪声，由远及近。林远按住腰间长剑，屏息凝神，等待着来客踏入客栈门槛的那一刻。';
+    yield const LlmChunk.content('<date>建中元年冬</date>\n\n');
+    yield const LlmChunk.content(
+      '林远踏入风雪客栈。堂内火炉噼啪作响，店小二热情地迎上前来：“客官打尖还是住店？”'
+      '林远解下披风，拍去上面的积雪，环顾四周。客栈角落里坐着几名按刀的行商，目光阴郁；'
+      '柜台后的掌柜拨弄着算盘，神色警惕。风雪撞击着窗棂，夜色愈发深沉。远处的山道上隐隐传来阵阵狼嗥，'
+      '似乎今夜注定不太平静。他缓缓走向大堂中央的空桌，心中暗自盘算着接下来的去向与接头暗号。'
+      '门外的风声愈发尖锐，夹杂着马蹄的踏雪声，由远及近。林远按住腰间长剑，屏息凝神，等待着来客踏入客栈门槛的那一刻。',
+    );
     throw const AppError(AppErrorKind.network, '网络数据流意外中断');
   }
 }
@@ -2861,11 +2846,11 @@ class _MockNetworkFailAlwaysClient extends LlmClient {
       <List<Map<String, String>>>[];
 
   @override
-  Stream<String> streamChat({
+  Stream<LlmChunk> streamChunks({
     required AppConfig config,
     required String apiKey,
     required List<Map<String, String>> messages,
-    String workspaceId = '',
+    String? workspaceId,
   }) async* {
     receivedMessages.add(List<Map<String, String>>.from(messages));
     throw const AppError(AppErrorKind.network, '连接模型服务超时，网络连接断开。');
@@ -2874,13 +2859,13 @@ class _MockNetworkFailAlwaysClient extends LlmClient {
 
 class _MockNetworkInterruptWithShortBodyClient extends LlmClient {
   @override
-  Stream<String> streamChat({
+  Stream<LlmChunk> streamChunks({
     required AppConfig config,
     required String apiKey,
     required List<Map<String, String>> messages,
-    String workspaceId = '',
+    String? workspaceId,
   }) async* {
-    yield '<date>建中元年冬</date>\n\n林远按住剑柄，缓步走入风雪中。';
+    yield const LlmChunk.content('<date>建中元年冬</date>\n\n林远按住剑柄，缓步走入风雪中。');
     throw const AppError(AppErrorKind.network, '网络数据流意外中断');
   }
 }
@@ -2889,24 +2874,28 @@ class _MockNetworkInterruptOnceThenSucceedClient extends LlmClient {
   int attempts = 0;
 
   @override
-  Stream<String> streamChat({
+  Stream<LlmChunk> streamChunks({
     required AppConfig config,
     required String apiKey,
     required List<Map<String, String>> messages,
-    String workspaceId = '',
+    String? workspaceId,
   }) async* {
     attempts++;
     if (attempts == 1) {
-      yield '<date>1976年10月7日</date>\n\n林远在办公室沉吟良久，电报机不断作响。局势已经千钧一发。'
-          '全国各地的目光都在注视着这里，每一分每一秒都关乎着未来的走向。他握着听筒的手微微颤抖，但眼神却异常坚定。'
-          '门外传来了急促的脚步声，通讯员满头大汗地闯了进来：“报告！北京方向急电！”林远深吸一口气，接过电报纸快速浏览。'
-          '形势比预想的还要复杂，但这一战已经无可避免。他拿起红色专线电话，下达了第一道命令……';
+      yield const LlmChunk.content(
+        '<date>1976年10月7日</date>\n\n林远在办公室沉吟良久，电报机不断作响。局势已经千钧一发。'
+        '全国各地的目光都在注视着这里，每一分每一秒都关乎着未来的走向。他握着听筒的手微微颤抖，但眼神却异常坚定。'
+        '门外传来了急促的脚步声，通讯员满头大汗地闯了进来：“报告！北京方向急电！”林远深吸一口气，接过电报纸快速浏览。'
+        '形势比预想的还要复杂，但这一战已经无可避免。他拿起红色专线电话，下达了第一道命令……',
+      );
       throw const AppError(AppErrorKind.network, 'ClientException: Connection closed while receiving data');
     }
 
-    yield '<date>1976年10月7日 晨</date>\n\n'
-        '全国各地电报如雪片般飞来，广播控制室内一片肃穆。林远当机立断，下达全线戒备指令。\n\n'
-        '<choices>\n1. 调度基层民兵加强广播大楼防守\n2. 迅速召集核心骨干举行闭门紧急例会\n</choices>';
+    yield const LlmChunk.content(
+      '<date>1976年10月7日 晨</date>\n\n'
+      '全国各地电报如雪片般飞来，广播控制室内一片肃穆。林远当机立断，下达全线戒备指令。\n\n'
+      '<choices>\n1. 调度基层民兵加强广播大楼防守\n2. 迅速召集核心骨干举行闭门紧急例会\n</choices>',
+    );
   }
 }
 

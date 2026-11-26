@@ -2,26 +2,28 @@ import 'dart:convert';
 
 /// 统一错误分类。
 ///
-/// 旧版本在 `catch (e)` 里把异常整个吞掉，只给两句通用选项，
-/// 用户永远不知道是 Key 错了、额度没了还是断网。现在所有网络/解析
-/// 失败都必须先归类成 [AppError]，UI 才能给出可读提示。
+/// 所有网络、协议、解析异常都先归类为 [AppError]，
+/// 保留服务端真实响应体作为排障依据，同时给出可读中文提示。
 enum AppErrorKind {
-  /// 连不上 / DNS 失败 / 超时
+  /// 连不上 / DNS 失败 / 连接或流式超时 / 断流
   network,
 
   /// 401 / 403：Key 错、Key 被停用、无该模型权限
   auth,
 
+  /// 400 / 404 / 422：请求参数不合法、模型名不存在、端点路径错误
+  badRequest,
+
   /// 429 或额度耗尽
   rateLimit,
 
-  /// 5xx
+  /// 5xx 服务端异常
   server,
 
   /// 模型拒答（内容审核拦截，返回空或只有致歉语）
   refused,
 
-  /// 输出被截断（没有出现 `<choices>` 结构块）
+  /// 输出被截断（没有出现 `<choices>` 结构块或正文不完整）
   truncated,
 
   /// 返回体解析失败
@@ -39,30 +41,82 @@ class AppError implements Exception {
   /// 面向用户的中文说明，可直接显示。
   final String message;
 
-  /// 原始信息，仅用于排查。
+  /// 原始信息（HTTP 状态码 / 真实响应体），用于日志排障。
   final String? detail;
 
   final int? statusCode;
 
   const AppError(this.kind, this.message, {this.detail, this.statusCode});
 
-  /// 是否值得自动重试。
+  /// 是否值得自动重试（纯网络波动、限流、5xx 服务端故障）。
   bool get retryable =>
       kind == AppErrorKind.network ||
       kind == AppErrorKind.server ||
-      kind == AppErrorKind.rateLimit ||
-      kind == AppErrorKind.truncated;
+      kind == AppErrorKind.rateLimit;
 
-  /// 是否属于「模型不愿意说」—— 走兜底链路而不是单纯重试。
-  bool get isRefusal =>
+  /// 是否属于配置/凭证类硬错误（严禁盲目重试或降级覆盖存档）。
+  bool get isConfigError =>
+      kind == AppErrorKind.auth || kind == AppErrorKind.badRequest;
+
+  /// 是否属于内容契约违背（拒答 / 缺分支）。
+  bool get isContractFailure =>
       kind == AppErrorKind.refused || kind == AppErrorKind.truncated;
 
+  /// 提取服务端 JSON 响应体中的真实错误描述。
+  static String extractServerMessage(String body) {
+    final trimmed = body.trim();
+    if (trimmed.isEmpty) return '';
+    try {
+      final decoded = jsonDecode(trimmed);
+      if (decoded is Map) {
+        final err = decoded['error'];
+        if (err is Map && err['message'] != null) {
+          return err['message'].toString().trim();
+        }
+        if (err is String && err.trim().isNotEmpty) {
+          return err.trim();
+        }
+        for (final key in const <String>['message', 'msg', 'detail']) {
+          final v = decoded[key];
+          if (v != null && v.toString().trim().isNotEmpty) {
+            return v.toString().trim();
+          }
+        }
+      }
+    } catch (_) {
+      // 非 JSON 响应体时保留简短原文
+    }
+    return '';
+  }
+
   factory AppError.fromStatus(int statusCode, String body) {
-    final brief = body.length > 300 ? '${body.substring(0, 300)}…' : body;
+    final brief = body.length > 400 ? '${body.substring(0, 400)}…' : body;
+    final serverMsg = extractServerMessage(body);
+    final suffix = serverMsg.isNotEmpty ? '：$serverMsg' : '';
+
     if (statusCode == 401 || statusCode == 403) {
       return AppError(
         AppErrorKind.auth,
-        'API Key 无效或没有该模型的调用权限，请在设置里核对 Key 与模型名。',
+        'API Key 无效或无权调用该模型（$statusCode）$suffix',
+        detail: 'HTTP $statusCode · $brief',
+        statusCode: statusCode,
+      );
+    }
+    if (statusCode == 404) {
+      return AppError(
+        AppErrorKind.badRequest,
+        '接口地址或模型不存在（404）$suffix。请检查 Base URL 与模型代码。',
+        detail: 'HTTP 404 · $brief',
+        statusCode: statusCode,
+      );
+    }
+    if (statusCode == 400 || statusCode == 422) {
+      final msg = serverMsg.isNotEmpty
+          ? '请求参数被拒绝（$statusCode）：$serverMsg'
+          : '请求被拒绝（$statusCode）：多为模型名不存在、参数不兼容或额度/上下文超限，请核对配置。';
+      return AppError(
+        AppErrorKind.badRequest,
+        msg,
         detail: 'HTTP $statusCode · $brief',
         statusCode: statusCode,
       );
@@ -70,7 +124,7 @@ class AppError implements Exception {
     if (statusCode == 429) {
       return AppError(
         AppErrorKind.rateLimit,
-        '请求过于频繁或额度已耗尽，稍后再试。',
+        '请求过于频繁或账户额度已耗尽（429）$suffix，请稍后再试。',
         detail: 'HTTP 429 · $brief',
         statusCode: statusCode,
       );
@@ -78,46 +132,15 @@ class AppError implements Exception {
     if (statusCode >= 500) {
       return AppError(
         AppErrorKind.server,
-        '模型服务端出错（$statusCode），已自动重试。',
+        '模型服务端暂时不可用（$statusCode）$suffix。',
         detail: 'HTTP $statusCode · $brief',
-        statusCode: statusCode,
-      );
-    }
-    if (statusCode == 400) {
-      String extraMsg = '';
-      try {
-        final decoded = jsonDecode(body);
-        if (decoded is Map) {
-          if (decoded['error'] is Map && decoded['error']['message'] != null) {
-            extraMsg = decoded['error']['message'].toString();
-          } else if (decoded['message'] != null) {
-            extraMsg = decoded['message'].toString();
-          } else if (decoded['msg'] != null) {
-            extraMsg = decoded['msg'].toString();
-          } else if (decoded['detail'] != null) {
-            extraMsg = decoded['detail'].toString();
-          } else if (decoded['error'] is String) {
-            extraMsg = decoded['error'].toString();
-          }
-        }
-      } catch (_) {}
-
-      final cleanExtra = extraMsg.trim();
-      final msg = cleanExtra.isNotEmpty
-          ? '请求被拒绝（400）：$cleanExtra'
-          : '请求被拒绝（400）：多为模型名不存在、单幕字数超限或参数不合法，请核对配置。';
-
-      return AppError(
-        AppErrorKind.auth,
-        msg,
-        detail: 'HTTP 400 · $brief',
         statusCode: statusCode,
       );
     }
     return AppError(
       AppErrorKind.unknown,
-      '接口返回异常状态 $statusCode。',
-      detail: brief,
+      '接口返回异常状态 $statusCode$suffix。',
+      detail: 'HTTP $statusCode · $brief',
       statusCode: statusCode,
     );
   }

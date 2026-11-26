@@ -59,11 +59,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _config = widget.config;
     _keyCtrl = TextEditingController();
-    _wsCtrl = TextEditingController();
+    _wsCtrl = TextEditingController(text: _config.workspaceId);
     _modelCtrl = TextEditingController(text: _config.modelName);
     _baseUrlCtrl = TextEditingController(text: _config.baseUrl);
     _loadKey();
-    _loadWorkspaceId();
+    _loadLegacyWorkspaceIdIfNeeded();
   }
 
   @override
@@ -81,10 +81,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _keyCtrl.text = k);
   }
 
-  Future<void> _loadWorkspaceId() async {
+  Future<void> _loadLegacyWorkspaceIdIfNeeded() async {
+    if (_config.workspaceId.trim().isNotEmpty) return;
     final ws = await PrefsStore.getString(_kWorkspace) ?? '';
-    if (!mounted) return;
-    setState(() => _wsCtrl.text = ws);
+    if (!mounted || ws.trim().isEmpty) return;
+    setState(() => _wsCtrl.text = ws.trim());
+    _apply(_config.copyWith(workspaceId: ws.trim()), immediate: true);
   }
 
   static const String _kWorkspace = 'nijing_workspace_id';
@@ -98,12 +100,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   /// 写入配置。
-  ///
-  /// [immediate] 用于**离散选择**（主题、字号、开关、选模型）——
-  /// 这类操作点一下就定了，必须立刻落盘。
-  ///
-  /// ⚠️ 2026-09-25 修：以前一律走 700ms 防抖，用户改完主题马上退出应用，
-  /// 改动就丢了 —— 表现为「设置没生效」。输入框与滑杆继续用防抖。
   void _apply(
     AppConfig next, {
     bool persistKey = false,
@@ -122,7 +118,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (persistKey) {
       SecureStore.writeApiKey(_keyCtrl.text.trim());
     }
-    PrefsStore.setStringDebounced(_kWorkspace, _wsCtrl.text.trim());
+    PrefsStore.setStringDebounced(_kWorkspace, next.workspaceId.trim());
   }
 
   Future<void> _test() async {
@@ -133,7 +129,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final err = await LlmClient().testConnection(
       config: _config,
       apiKey: _keyCtrl.text.trim(),
-      workspaceId: _wsCtrl.text.trim(),
+      workspaceId: _config.workspaceId.trim(),
     );
     if (!mounted) return;
     setState(() {
@@ -211,44 +207,49 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const SizedBox(height: 12),
         ValueListenableBuilder<int>(
           valueListenable: RuntimeLog.revision,
-          builder: (context, _, child) => Text(
-            RuntimeLog.enabled
-                ? '当前已记录 ${RuntimeLog.count} 条'
-                    '${RuntimeLog.verbose ? '（详细模式）' : ''}'
-                : '日志未开启',
-            style: TextStyle(
-              fontSize: 12,
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-            ),
-          ),
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: <Widget>[
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: RuntimeLog.enabled && RuntimeLog.count > 0
-                    ? _exportLog
-                    : null,
-                icon: const Icon(Icons.save_alt_rounded, size: 18),
-                label: const Text('导出日志'),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  side: BorderSide(color: theme.dividerColor),
+          builder: (context, _, child) => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text(
+                RuntimeLog.enabled
+                    ? '当前已记录 ${RuntimeLog.count} 条'
+                        '${RuntimeLog.verbose ? '（详细模式）' : ''}'
+                    : '日志未开启',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
                 ),
               ),
-            ),
-            const SizedBox(width: 10),
-            OutlinedButton.icon(
-              onPressed: RuntimeLog.count > 0 ? _clearLog : null,
-              icon: const Icon(Icons.delete_outline_rounded, size: 18),
-              label: const Text('清空'),
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                side: BorderSide(color: theme.dividerColor),
+              const SizedBox(height: 10),
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: RuntimeLog.enabled && RuntimeLog.count > 0
+                          ? _exportLog
+                          : null,
+                      icon: const Icon(Icons.save_alt_rounded, size: 18),
+                      label: const Text('导出日志'),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        side: BorderSide(color: theme.dividerColor),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  OutlinedButton.icon(
+                    onPressed: RuntimeLog.count > 0 ? _clearLog : null,
+                    icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                    label: const Text('清空'),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      side: BorderSide(color: theme.dividerColor),
+                    ),
+                  ),
+                ],
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ];
 
@@ -409,7 +410,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             labelText: '业务空间 ID（选填）',
             hintText: '华北2（北京）填了会改用专属域名，更稳定',
           ),
-          onChanged: (_) => _apply(_config),
+          onChanged: (v) => _apply(_config.copyWith(workspaceId: v.trim())),
         ),
         const SizedBox(height: 14),
       ],
@@ -418,7 +419,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         controller: _modelCtrl,
         decoration: const InputDecoration(
           labelText: '模型代码',
-          hintText: '例如 qwen3.8-flash',
+          hintText: '例如 qwen-plus / deepseek-reasoner / gemini-2.5-pro',
         ),
         onChanged: (v) => _apply(_config.copyWith(modelName: v)),
       ),
@@ -428,7 +429,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         runSpacing: 8,
         children: (_config.apiProvider == 'deepseek'
                 ? Providers.deepseekModels
-                : Providers.bailianModels)
+                : (_config.apiProvider == 'custom'
+                    ? Providers.customSampleModels
+                    : Providers.bailianModels))
             .map(
               (m) => ActionChip(
                 label: Text(m, style: const TextStyle(fontSize: 12)),
@@ -445,7 +448,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _switchRow(
         theme,
         '开启深度思考（Thinking 模式）',
-        '开启后模型将先深入权衡局势再落笔成文，思考过程自动收纳进「推演思考」抽屉，正文不受影响；支持 Qwen 系列（如 qwen3.8-flash）、百炼及各类推理模型。',
+        '开启后模型将先权衡局势再落笔，思考内容物理隔离收纳进「推演思考」面板，绝不混入正文；自动兼容百炼 Qwen3/QwQ、DeepSeek-Reasoner 与自定义推理接口。',
         _config.enableThinking,
         (v) => _apply(_config.copyWith(enableThinking: v), immediate: true),
       ),

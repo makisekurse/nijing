@@ -49,25 +49,24 @@ class _QuickCreateScreenState extends State<QuickCreateScreen> {
     });
 
     final apiKey = await SecureStore.readApiKey();
-    final book = await WorldBuilderService.build(
+    final res = await WorldBuilderService.buildWithResult(
       config: widget.config,
       apiKey: apiKey,
       description: text,
+      workspaceId: widget.config.workspaceId,
     );
 
     if (!mounted) return;
     setState(() => _busy = false);
 
-    if (book == null) {
+    if (!res.isSuccess || res.book == null) {
       setState(() {
-        _error = apiKey.trim().isEmpty
-            ? '还没有配置模型接口，无法生成。可以先用空白模板手写。'
-            : '生成失败（网络或接口异常）。可以重试，或先用空白模板手写。';
+        _error = res.error ?? '生成失败，请重试或改用空白模板手写。';
       });
       return;
     }
 
-    await _previewAndSave(book);
+    await _previewAndSave(res.book!);
   }
 
   /// 生成结果不直接落库 —— 先让用户过一眼、可编辑，确认后才保存。

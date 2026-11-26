@@ -38,6 +38,9 @@ class MainActivity : FlutterActivity() {
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, fileExportChannel).setMethodCallHandler { call, result ->
             when (call.method) {
+                "getAppDataDir" -> {
+                    result.success(filesDir.absolutePath)
+                }
                 "saveFile" -> {
                     val fileName = call.argument<String>("fileName") ?: "export_${System.currentTimeMillis()}.txt"
                     val content = call.argument<String>("content") ?: ""

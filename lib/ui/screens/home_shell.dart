@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../../core/app_info.dart';
 import '../../data/prefs_store.dart';
+import '../../data/secure_store.dart';
 import '../../data/world_book_repository.dart';
 import '../../models/app_config.dart';
 import '../../models/save_slot.dart';
@@ -163,12 +164,13 @@ class _HomeShellState extends State<HomeShell> {
       if (!ok) return;
     }
 
-    // 重开 = 整槽重置成一条全新的主线。
-    // ⚠️ 不复用旧 slot 对象：那样会连旧的世界线一起留着。
+    // 重开 = 整槽重置成一条全新的主线，且必须先销毁旧的 GenerationController 缓存！
+    // 否则打开 ReaderScreen 时会直接把清空前的旧 session 从内存里复活回来。
+    GenerationController.disposeSlot(existing.id);
     final fresh = SaveSlot(
       id: existing.id,
-      title: existing.title,
-      worldBook: existing.worldBook,
+      title: book.name,
+      worldBook: book,
       createdAt: existing.createdAt,
     );
     if (book.openingScene.trim().isNotEmpty) {
@@ -464,7 +466,8 @@ class _HomeShellState extends State<HomeShell> {
         ),
       ),
     ),
-  );
+    );
+    ctrl.dispose();
     if (text == null || text.trim().isEmpty) return;
 
     try {
@@ -893,9 +896,11 @@ class _HomeShellState extends State<HomeShell> {
                     GenerationController.resetAll();
                     await SaveService.saveAll(<SaveSlot>[]);
                     await WorldBookRepository.saveAll(<WorldBook>[]);
+                    await SecureStore.clearApiKey();
                     await PrefsStore.remove(_kActiveSlot);
+                    await PrefsStore.remove('nijing_workspace_id');
                     await _reload();
-                    if (mounted) _toast('已清空');
+                    if (mounted) _toast('已清空全部本地数据与 API Key');
                   },
                 ),
                 const SizedBox(height: 12),
