@@ -33,7 +33,7 @@ class AppConfig {
   /// 是否启用后台静默异步提取（状态 / 人物 / 词条解耦，解放主模型文笔与速度）。
   bool enableBackgroundExtract;
 
-  /// 是否为后台状态/编年史单独指定轻量快速辅助模型（如 qwen-flash / deepseek-flash）。
+  /// 是否为后台状态/编年史单独指定轻量快速辅助模型（如 qwen3.8-flash / deepseek-flash）。
   /// 关闭时自动复用主模型并按方言强制关闭思考，零配置开箱即用。
   bool enableAuxModel;
 
@@ -46,7 +46,7 @@ class AppConfig {
   /// 辅助模型业务空间 ID
   String auxWorkspaceId;
 
-  /// 辅助模型代码（如 qwen-flash / deepseek-flash / gemini-3.8-flash）
+  /// 辅助模型代码（如 qwen3.8-flash / deepseek-flash / gemini-3.8-flash）
   String auxModelName;
 
   /// 已保存的多套模型配置档案，供设置页与阅读页一键切换。

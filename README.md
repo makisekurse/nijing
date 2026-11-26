@@ -28,8 +28,8 @@
 |---|---|
 | **`forui` 文学纸墨界面** | 基于 `forui` 触控组件骨架 + HCT 五级容器明度阶梯 + `lucide_icons_flutter` 打造，彻底告别原生裸框质感；书架自动绘制程序化出版物书封 |
 | **零清屏流式与原地续写** | 死守 `if (yielded) rethrow` 铁律：仅在首帧到达前自动重连，一旦吐出正文绝不抹屏重跑；断流或暂停时原地保留全部文字，支持一键「继续生成」「直接落幕」或「重试」，彻底根除「写一半重头来」与台词误杀 |
-| **主辅双模型后台档案官** | 主模型卸载 `<state>` / `<cast>` / `<glossary>` 维护负担、专注沉浸小说写作；辅助模型（如 `qwen-flash` / `deepseek-flash`）于后台静默增量抽取世界状态、人物与词条并标注变更徽标，省钱提速零阻塞 |
-| **2026 模型与方言引擎** | 全面跟进 2026 主流模型（`qwen4-max` / `qwen3.5-plus` / `qwen-flash`、`deepseek-flash` / `deepseek-v4-pro` 等），内置 `GET /models` 在线检索拉取与统一推理方言适配（百炼 `enable_thinking` + 预算、DeepSeek V4 `thinking.type` + `reasoning_effort`、OpenAI `reasoning_effort`） |
+| **主辅双模型后台档案官** | 主模型卸载 `<state>` / `<cast>` / `<glossary>` 维护负担、专注沉浸小说写作；辅助模型（如 `qwen3.8-flash` / `deepseek-flash`）于后台静默增量抽取世界状态、人物与词条并标注变更徽标，省钱提速零阻塞 |
+| **2026 模型与方言引擎** | 全面跟进 2026 主流模型（`qwen4-max` / `qwen3.8-max` / `qwen3.8-flash`、`deepseek-flash`（对应 V4.1-Flash 官方路由 ID）/ `deepseek-v4-pro` 等），内置 `GET /models` 在线检索拉取与统一推理方言适配（百炼 `enable_thinking` + 预算、DeepSeek V4 `thinking.type` + `reasoning_effort`、OpenAI `reasoning_effort`） |
 | **多服务商分槽加密存储** | 按 `providerId` / `profileId` / `aux_model` 分槽加密保存 API Key（兼容迁移旧默认 Key），跨厂商主辅混搭与多档案一键热切换绝不串 Key |
 | **现代阅读器与排版浮层** | 固定现代顶底栏不闪烁，`SuperSliverList` 零估算精准跳幕；内置页内实时排版浮层（字号 / 行距 / 缩进 / 书卷衬线 / 四套皮肤即点即变）、文学富文本（电报引用块 `>`、加粗/斜体不露裸星号）与呼吸感思考胶囊 |
 | **单抽屉全景收纳** | 阅读页右侧统一抽屉聚合「此刻状态 · 全书目录 · 世界线分岔树 · 导出工具」，彻底告别堆叠弹窗 |
@@ -60,10 +60,10 @@
 
 1. 装好 App，首次打开会引导配置模型接口（也可先跳过直接浏览）
 2. 进入「我的 → 模型与接口」，选择服务商并填入 API Key（各服务商独立加密保存，互不覆盖），点击「拉取模型」或手动选用模型并「测试连接」
-   - **阿里云百炼**：默认 `qwen4-max`，快捷支持 `qwen3.5-plus` / `qwen-flash` / `qwen-plus` / `qwen-turbo`，支持思考预算与华北 2 业务空间 ID
-   - **DeepSeek 官方**：支持 `deepseek-flash` 与 `deepseek-v4-pro`（自动适配 V4 `thinking.type` 与 `reasoning_effort`）
+   - **阿里云百炼**：默认 `qwen4-max`，快捷支持 `qwen3.8-max` / `qwen3.8-flash` / `qwen3.5-plus` / `qwen-plus` / `qwen-turbo`，支持思考预算与华北 2 业务空间 ID
+   - **DeepSeek 官方**：支持 `deepseek-flash`（对应 V4.1-Flash 稳定路由 ID）与 `deepseek-v4-pro`（自动适配 V4 `thinking.type` 与 `reasoning_effort`）
    - **自定义 OpenAI 兼容**：填完整 Base URL（如 `https://api.example.com/v1`），支持 `GET /models` 在线拉取与多套「模型档案」保存切换
-   - **主辅双模型（推荐）**：可在「后台档案与辅模型」折叠区绑定任意厂商的轻量高速模型（如 `qwen-flash` / `deepseek-flash`）负责状态与编年史抽取，主模型专注写故事
+   - **主辅双模型（推荐）**：可在「后台档案与辅模型」折叠区绑定任意厂商的轻量高速模型（如 `qwen3.8-flash` / `deepseek-flash`）负责状态与编年史抽取，主模型专注写故事
 3. 「**世界**」标签 → 一键导入示例《决胜西南1949》、选择本地 `.json`/`.txt` 文件、或由 AI 一句话扩写创建世界
 4. 「**继续**」标签 → 进入正在推演的书卷，随时切换多条世界线或继续阅读
 

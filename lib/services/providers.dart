@@ -42,8 +42,8 @@ class Providers {
       shortLabel: '阿里云百炼',
       defaultBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
       defaultModel: 'qwen4-max',
-      recommendedAuxModel: 'qwen-flash',
-      hint: 'Key 形如 sk-xxxx。推荐主力用 qwen4-max（1M 上下文），后台档案官用 qwen-flash；支持一键拉取最新模型列表。',
+      recommendedAuxModel: 'qwen3.8-flash',
+      hint: 'Key 形如 sk-xxxx。推荐主力用 qwen4-max / qwen3.8-max（1M 上下文），后台档案官用 qwen3.8-flash；支持一键拉取最新模型列表。',
     ),
     ProviderOption(
       id: 'deepseek',
@@ -52,7 +52,7 @@ class Providers {
       defaultBaseUrl: 'https://api.deepseek.com/v1',
       defaultModel: 'deepseek-flash',
       recommendedAuxModel: 'deepseek-flash',
-      hint: '官方已全面切换至 V4 系列：deepseek-flash（极速全能，可开关思考）与 deepseek-v4-pro（旗舰深度推理）；旧版 deepseek-chat / reasoner 已退役。',
+      hint: '官方已全面切换至 V4 系列：deepseek-flash（对应 V4.1-Flash 官方稳定路由 ID，可开关思考）与 deepseek-v4-pro（旗舰深度推理）；旧版 deepseek-chat / reasoner 已退役。',
     ),
     ProviderOption(
       id: 'custom',
@@ -68,14 +68,14 @@ class Providers {
   /// 阿里云百炼 2026 常用快捷模型（支持下方一键动态拉取最新完整列表）。
   static const List<String> bailianModels = <String>[
     'qwen4-max',
+    'qwen3.8-max',
+    'qwen3.8-flash',
     'qwen3.5-plus',
-    'qwen-max',
     'qwen-plus',
-    'qwen-flash',
     'qwen-turbo',
   ];
 
-  /// DeepSeek 官方 2026 V4 系列模型。
+  /// DeepSeek 官方 2026 V4 系列模型（`deepseek-flash` 即官方 V4.1-Flash 路由 ID）。
   static const List<String> deepseekModels = <String>[
     'deepseek-flash',
     'deepseek-v4-pro',
@@ -84,6 +84,7 @@ class Providers {
   /// 自定义端点 2026 快捷参考（仅作快速填入参考，推荐直接用「拉取模型」动态同步）。
   static const List<String> customSampleModels = <String>[
     'qwen4-max',
+    'qwen3.8-flash',
     'deepseek-v4-pro',
     'deepseek-flash',
     'gemini-4-neon',

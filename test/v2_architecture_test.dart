@@ -181,6 +181,15 @@ void main() {
       expect(Providers.isRetiredDeepSeekModel('deepseek-chat'), isTrue);
       expect(Providers.isRetiredDeepSeekModel('deepseek-reasoner'), isTrue);
       expect(Providers.isRetiredDeepSeekModel('deepseek-v4-pro'), isFalse);
+
+      // 校验 2026 百炼与 DeepSeek 官方快捷与辅模型推荐预设
+      expect(Providers.byId('bailian').defaultModel, 'qwen4-max');
+      expect(Providers.byId('bailian').recommendedAuxModel, 'qwen3.8-flash');
+      expect(
+        Providers.bailianModels,
+        containsAll(<String>['qwen4-max', 'qwen3.8-max', 'qwen3.8-flash']),
+      );
+      expect(Providers.byId('deepseek').recommendedAuxModel, 'deepseek-flash');
     });
   });
 

@@ -691,7 +691,7 @@ class _SettingsModelSectionState extends State<SettingsModelSection> {
                         children: <Widget>[
                           Expanded(
                             child: Text(
-                              '开启后，后台世界状态抽取与编年史压缩将路由至独立便宜快模型（如 qwen-flash / deepseek-flash），不开启则自动复用主模型并强制禁思考。',
+                              '开启后，后台世界状态抽取与编年史压缩将路由至独立便宜快模型（如 qwen3.8-flash / deepseek-flash），不开启则自动复用主模型并强制禁思考。',
                               style: TextStyle(
                                 fontSize: 12,
                                 height: 1.5,
@@ -702,10 +702,27 @@ class _SettingsModelSectionState extends State<SettingsModelSection> {
                           const SizedBox(width: 10),
                           FSwitch(
                             value: _cfg.enableAuxModel,
-                            onChange: (v) => widget.onApply(
-                              _cfg.copyWith(enableAuxModel: v),
-                              immediate: true,
-                            ),
+                            onChange: (v) {
+                              var nextAuxModel = _cfg.auxModelName;
+                              if (v && nextAuxModel.trim().isEmpty) {
+                                final auxProvId = _cfg.auxApiProvider.isEmpty
+                                    ? _cfg.apiProvider
+                                    : _cfg.auxApiProvider;
+                                final rec =
+                                    Providers.byId(auxProvId).recommendedAuxModel;
+                                if (rec.isNotEmpty) {
+                                  nextAuxModel = rec;
+                                  _auxModelCtrl.text = rec;
+                                }
+                              }
+                              widget.onApply(
+                                _cfg.copyWith(
+                                  enableAuxModel: v,
+                                  auxModelName: nextAuxModel,
+                                ),
+                                immediate: true,
+                              );
+                            },
                           ),
                         ],
                       ),
@@ -766,7 +783,7 @@ class _SettingsModelSectionState extends State<SettingsModelSection> {
                                   ),
                                 ),
                                 label: const Text('辅助模型代码'),
-                                hint: '例如 qwen-flash / deepseek-flash',
+                                hint: '例如 qwen3.8-flash / deepseek-flash',
                               ),
                             ),
                             const SizedBox(width: 8),
