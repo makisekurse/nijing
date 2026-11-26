@@ -18,6 +18,8 @@ import java.io.FileOutputStream
 class MainActivity : FlutterActivity() {
     private val wakelockChannel = "io.github.makisekurse.nijing/wakelock"
     private val fileExportChannel = "io.github.makisekurse.nijing/file_export"
+    private val pickFileRequestCode = 9041
+    private var pendingPickResult: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -154,8 +156,67 @@ class MainActivity : FlutterActivity() {
                         result.error("SHARE_FAILED", e.message, null)
                     }
                 }
+                "pickTextFile" -> {
+                    pendingPickResult?.success(null)
+                    pendingPickResult = result
+                    try {
+                        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = "*/*"
+                            putExtra(
+                                Intent.EXTRA_MIME_TYPES,
+                                arrayOf(
+                                    "application/json",
+                                    "text/plain",
+                                    "text/markdown",
+                                    "application/octet-stream"
+                                )
+                            )
+                        }
+                        @Suppress("DEPRECATION")
+                        startActivityForResult(intent, pickFileRequestCode)
+                    } catch (e: Exception) {
+                        pendingPickResult = null
+                        result.error("PICK_FAILED", e.message, null)
+                    }
+                }
                 else -> result.notImplemented()
             }
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != pickFileRequestCode) return
+        val cb = pendingPickResult ?: return
+        pendingPickResult = null
+        if (resultCode != android.app.Activity.RESULT_OK || data?.data == null) {
+            cb.success(null)
+            return
+        }
+        try {
+            val uri = data.data!!
+            val bytes = contentResolver.openInputStream(uri)?.use { ins ->
+                val maxBytes = 8 * 1024 * 1024
+                val buf = java.io.ByteArrayOutputStream()
+                val chunk = ByteArray(16384)
+                var total = 0
+                while (true) {
+                    val n = ins.read(chunk)
+                    if (n <= 0) break
+                    total += n
+                    if (total > maxBytes) {
+                        throw IllegalStateException("所选文件超过 8MB 上限，请选择 .json / .txt 文本文件")
+                    }
+                    buf.write(chunk, 0, n)
+                }
+                buf.toByteArray()
+            }
+            cb.success(bytes?.toString(Charsets.UTF_8))
+        } catch (e: Exception) {
+            cb.error("PICK_READ_FAILED", e.message, null)
         }
     }
 

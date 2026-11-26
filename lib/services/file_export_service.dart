@@ -211,4 +211,15 @@ class FileExportService {
     }
     return false;
   }
+
+  /// 通过 Android 系统 SAF（ACTION_OPEN_DOCUMENT）选取本地 .json / .txt / .md 文本文件。
+  ///
+  /// 零外部插件、零存储权限弹窗，用户取消或非 Android 宿主返回 null。
+  static Future<String?> pickTextFile() async {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      final text = await _channel.invokeMethod<String>('pickTextFile');
+      return text;
+    }
+    return null;
+  }
 }

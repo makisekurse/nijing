@@ -1,7 +1,3 @@
-import 'dart:convert';
-import 'dart:io';
-
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
@@ -10,6 +6,7 @@ import '../data/secure_store.dart';
 import '../data/world_book_repository.dart';
 import '../models/save_slot.dart';
 import '../models/world_book.dart';
+import '../services/file_export_service.dart';
 import '../services/game_session.dart';
 import '../services/generation_controller.dart';
 import '../services/save_service.dart';
@@ -165,24 +162,9 @@ class LibraryProvider extends ChangeNotifier {
     return book;
   }
 
-  /// 使用系统文件选择器选取本地 `.json` / `.txt` 世界书或存档文件。
+  /// 使用系统文件选择器（Android 原生 SAF）选取本地 `.json` / `.txt` / `.md` 世界书或存档文件。
   /// 返回 null 表示用户取消选择。
-  Future<String?> pickLocalTextFile() async {
-    final result = await FilePicker.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: <String>['json', 'txt', 'md'],
-      withData: true,
-    );
-    if (result == null || result.files.isEmpty) return null;
-    final picked = result.files.first;
-    if (picked.bytes != null) {
-      return utf8.decode(picked.bytes!, allowMalformed: true);
-    }
-    if (picked.path != null && picked.path!.isNotEmpty) {
-      return File(picked.path!).readAsString();
-    }
-    return null;
-  }
+  Future<String?> pickLocalTextFile() => FileExportService.pickTextFile();
 
   /// 从 JSON 文本导入一个推演存档并落库。
   Future<SaveSlot> importSaveFromText(String raw) async {

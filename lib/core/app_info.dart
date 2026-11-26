@@ -20,7 +20,7 @@ class AppInfo {
   static const String developerUrl = 'https://github.com/makisekurse';
 
   static const String version =
-      String.fromEnvironment('APP_VERSION', defaultValue: '2.0.1-dev');
+      String.fromEnvironment('APP_VERSION', defaultValue: '2.0.2-dev');
   static const String buildNumber =
       String.fromEnvironment('BUILD_NUMBER', defaultValue: '0');
   static const String gitSha =
