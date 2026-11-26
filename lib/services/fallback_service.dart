@@ -306,9 +306,16 @@ class FallbackService {
       }
     } on AppError catch (e) {
       if (e.kind == AppErrorKind.cancelled) {
+        RuntimeLog.i('Fallback', '续写已由用户暂停（累计新增 ${addedContent.length} 字）');
         yield const GenEvent.interrupted('已暂停续写（已保留当前全部正文）');
         return;
       }
+      RuntimeLog.w(
+        'Fallback',
+        '续写抛出：${e.kind.name} · ${e.message}'
+            '${e.detail == null ? '' : ' · ${e.detail}'}'
+            '（本次新增 ${addedContent.length} 字）',
+      );
       yield GenEvent.interrupted('${e.message}（已保留当前全部正文）');
       return;
     }
@@ -324,9 +331,17 @@ class FallbackService {
       content: mergedContent,
       thought: mergedThought,
     );
-    if (client.lastFinishReason == 'length' &&
+    final finishReason = client.lastFinishReason;
+    RuntimeLog.i(
+      'Fallback',
+      '续写完成：累计正文 ${parsed.body.length} 字 · 新增 ${addedContent.length} 字 · '
+          '分支 ${parsed.choices.length} 条'
+          '${finishReason == null ? '' : ' · finish_reason=$finishReason'}',
+    );
+    if (finishReason == 'length' &&
         parsed.body.trim().isNotEmpty &&
         parsed.choices.isEmpty) {
+      RuntimeLog.w('Fallback', '续写再次命中 finish_reason=length 且缺少 <choices>');
       yield const GenEvent.interrupted(
         '续写再次达到长度上限（已保留全部正文，可继续生成或直接落幕）',
       );
@@ -335,6 +350,7 @@ class FallbackService {
     if (parsed.body.trim().isNotEmpty) {
       yield GenEvent.done(parsed);
     } else {
+      RuntimeLog.w('Fallback', '续写未返回新内容，保留先前现场');
       yield const GenEvent.interrupted('续写未返回新内容，已保留先前现场。');
     }
   }

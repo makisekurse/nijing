@@ -1,6 +1,6 @@
 # 拟境 · nijing
 
-> 世界书驱动的沉浸式情境推演引擎（v2.0.3）
+> 世界书驱动的沉浸式情境推演引擎（v2.0.4）
 
 把自己放进一个世界，做一个行动，看这个世界如何回应。
 
@@ -94,9 +94,9 @@ flutter analyze
 flutter test
 ```
 
-当前共 **215 项自动化单元测试与组件测试**（[`test/nijing_test.dart`](test/nijing_test.dart) + [`test/rescue_architecture_test.dart`](test/rescue_architecture_test.dart) + [`test/v2_architecture_test.dart`](test/v2_architecture_test.dart) + [`test/audit_ui_smoke_test.dart`](test/audit_ui_smoke_test.dart) + [`test/audit_core_regression_test.dart`](test/audit_core_regression_test.dart)），秒级全绿，覆盖：
+当前共 **217 项自动化单元测试与组件测试**（[`test/nijing_test.dart`](test/nijing_test.dart) + [`test/rescue_architecture_test.dart`](test/rescue_architecture_test.dart) + [`test/v2_architecture_test.dart`](test/v2_architecture_test.dart) + [`test/audit_ui_smoke_test.dart`](test/audit_ui_smoke_test.dart) + [`test/audit_core_regression_test.dart`](test/audit_core_regression_test.dart)），秒级全绿，覆盖：
 
-- **同构整页渲染与 `forui` 弹层冒烟**：不套假 Material `Scaffold`，直接挂载生产 `HistSimApp` / `FTheme` + `FToaster` 渲染主页三 Tab、引导页、设置全模块、快速创建页、世界书编辑页、阅读页 + `Aa` 排版浮层 + 右侧抽屉 4 Tab + 远端模型选择器与全部附属弹层，零 `No Material`、零溢出、零 `ScaffoldMessenger` 断言
+- **同构整页渲染、中文系统双轨本地化与 `forui` 弹层冒烟**：不套假 Material `Scaffold`，在默认 `en_US` 与真实中文 `zh_Hans_CN` 双语言环境下挂载生产 `HistSimApp` / `FTheme` + `FToaster` 渲染全应用全部页面、阅读页 `SelectionArea` / `TextField` / 主宰与断流续写链路、`Aa` 排版浮层、右侧抽屉 4 Tab、远端模型选择器与全部附属弹层，零 `No Material`、零 `No MaterialLocalizations`、零溢出、零 `ScaffoldMessenger` 断言
 - **零清屏流式、长度截断与代际状态机**：首帧前退避重试收敛、网络重试零注入 `retryNudge`、已吐正文断流及 `finish_reason == 'length'` 自动转 `interrupted` 原地保留、`continueGeneration()` 续写思考分段与计时累加、`cancel()` + `discardInterrupted()` 代际 `_runEpoch` 防误刷 `failed`、角色台词零误杀
 - **2026 模型与方言引擎**：百炼 `enable_thinking` + 预算、DeepSeek V4 `thinking.type` + `reasoning_effort`、OpenAI `reasoning_effort`、基于 `package:http` 的远端 `/models` 多格式解析与旧模型退役检测
 - **多服务商分槽加密存储与防泄露**：百炼 / DeepSeek / 自定义 / 档案 / 辅模型槽位严格隔离、`activeProfileId` 持久化与手动切厂商防串 Key、`applyProfile` 不污染全局厂商槽、跨厂商辅模型无 Key 绝不泄露主 Key、主 `workspaceId` 不污染跨厂辅模型 URL、运行日志全池多密钥自动脱敏

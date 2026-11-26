@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nijing/core/app_error.dart';
 import 'package:nijing/data/secure_store.dart';
 import 'package:nijing/main.dart';
 import 'package:nijing/models/annotation.dart';
@@ -11,9 +12,16 @@ import 'package:nijing/models/save_slot.dart';
 import 'package:nijing/models/world_book.dart';
 import 'package:nijing/models/world_line.dart';
 import 'package:nijing/models/world_state.dart';
+import 'package:nijing/services/fallback_service.dart';
+import 'package:nijing/services/generation_controller.dart';
+import 'package:nijing/services/llm_client.dart';
 import 'package:nijing/services/providers.dart';
+import 'package:nijing/services/runtime_log.dart';
 import 'package:nijing/state/config_provider.dart';
 import 'package:nijing/state/library_provider.dart';
+import 'package:nijing/ui/screens/about_screen.dart';
+import 'package:nijing/ui/screens/cast_screen.dart';
+import 'package:nijing/ui/screens/chronicle_screen.dart';
 import 'package:nijing/ui/screens/onboarding_screen.dart';
 import 'package:nijing/ui/screens/quick_create_screen.dart';
 import 'package:nijing/ui/screens/reader_screen.dart';
@@ -414,4 +422,234 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   });
+
+  group('v2.0.4 中文系统语言（zh_Hans_CN）双轨本地化与续写日志回归', () {
+    testWidgets('zh_Hans_CN 下全页面 + ReaderScreen（SelectionArea/TextField/主宰/断流续写）零灰屏零溢出',
+        (tester) async {
+      tester.platformDispatcher.localesTestValue = const <Locale>[
+        Locale.fromSubtags(
+          languageCode: 'zh',
+          scriptCode: 'Hans',
+          countryCode: 'CN',
+        ),
+      ];
+      addTearDown(tester.platformDispatcher.clearLocalesTestValue);
+
+      final cfgProvider = ConfigProvider(
+        AppConfig(themeMode: 'vintage', godMode: true, modelName: 'qwen3.8-flash'),
+      );
+      final libProvider = LibraryProvider();
+      addTearDown(() {
+        cfgProvider.dispose();
+        libProvider.dispose();
+      });
+
+      final slot = sampleSlot();
+      final ctrl = GenerationController.forSlot(slot.id);
+      addTearDown(() => GenerationController.disposeSlot(slot.id));
+
+      // 1. 主页 + 附属页面在 zh_Hans_CN 下均无缺失 MaterialLocalizations/CupertinoLocalizations 告警或异常
+      final screens = <Widget>[
+        HistSimApp(
+          initialConfig: AppConfig(themeMode: 'vintage'),
+          showOnboarding: false,
+        ),
+        HistSimApp.buildHostApp(
+          themeMode: 'vintage',
+          home: OnboardingScreen(onConfigure: () {}, onSkip: () {}),
+        ),
+        MultiProvider(
+          providers: <ChangeNotifierProvider<ChangeNotifier>>[
+            ChangeNotifierProvider<ConfigProvider>.value(value: cfgProvider),
+            ChangeNotifierProvider<LibraryProvider>.value(value: libProvider),
+          ],
+          child: HistSimApp.buildHostApp(
+            themeMode: 'vintage',
+            home: const SettingsScreen(section: SettingsSection.all),
+          ),
+        ),
+        MultiProvider(
+          providers: <ChangeNotifierProvider<ChangeNotifier>>[
+            ChangeNotifierProvider<ConfigProvider>.value(value: cfgProvider),
+            ChangeNotifierProvider<LibraryProvider>.value(value: libProvider),
+          ],
+          child: HistSimApp.buildHostApp(
+            themeMode: 'vintage',
+            home: const QuickCreateScreen(),
+          ),
+        ),
+        MultiProvider(
+          providers: <ChangeNotifierProvider<ChangeNotifier>>[
+            ChangeNotifierProvider<ConfigProvider>.value(value: cfgProvider),
+            ChangeNotifierProvider<LibraryProvider>.value(value: libProvider),
+          ],
+          child: HistSimApp.buildHostApp(
+            themeMode: 'vintage',
+            home: WorldBookEditorScreen(book: slot.worldBook),
+          ),
+        ),
+        HistSimApp.buildHostApp(
+          themeMode: 'vintage',
+          home: CastScreen(history: slot.activeLine.history),
+        ),
+        HistSimApp.buildHostApp(
+          themeMode: 'vintage',
+          home: ChronicleScreen(history: slot.activeLine.history),
+        ),
+        HistSimApp.buildHostApp(
+          themeMode: 'vintage',
+          home: const AboutScreen(),
+        ),
+      ];
+
+      for (final screen in screens) {
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pumpWidget(screen);
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+      }
+
+      // 2. ReaderScreen 在 zh_Hans_CN + 主宰模式 + 正常/生成中/断流/续写态下 TextField 与 SelectionArea 零异常
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpWidget(
+        ChangeNotifierProvider<ConfigProvider>.value(
+          value: cfgProvider,
+          child: Consumer<ConfigProvider>(
+            builder: (context, p, _) => HistSimApp.buildHostApp(
+              themeMode: p.config.themeMode,
+              home: ReaderScreen(
+                config: p.config,
+                slot: slot,
+                onConfigChanged: (c) => p.updateConfig(c, immediate: true),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(TextField), findsOneWidget);
+      expect(find.byType(SelectionArea), findsOneWidget);
+      expect(find.textContaining('细雨打在油布地图上'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      // 验证 TextField 在中文 Locale 下可正常聚焦与输入
+      await tester.tap(find.byType(TextField));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), '立刻增派渡江梯队');
+      await tester.pumpAndSettle();
+      expect(find.text('立刻增派渡江梯队'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      // 模拟断流 -> 继续生成（busy = true，TextField enabled: false）全链路无灰屏无溢出
+      ctrl.status = GenerationStatus.interrupted;
+      ctrl.godMode = true;
+      ctrl.pendingAction = '立刻增派渡江梯队';
+      ctrl.live = '江风骤紧，对岸灯火忽明忽暗。';
+      ctrl.notice = '模型流返回错误（已完整保留上方正文）';
+      ctrl.notifyListeners();
+      await tester.pump();
+      expect(find.text('继续生成'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      ctrl.status = GenerationStatus.generating;
+      ctrl.notice = '';
+      ctrl.notifyListeners();
+      await tester.pump();
+      expect(find.text('推演生成中…'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    test('FallbackService.continueGenerate 错误与完成路径均写入 RuntimeLog', () async {
+      final prevEnabled = RuntimeLog.enabled;
+      RuntimeLog.enabled = true;
+      RuntimeLog.clear();
+      addTearDown(() {
+        RuntimeLog.clear();
+        RuntimeLog.enabled = prevEnabled;
+      });
+
+      final book = sampleBook();
+      final failClient = _FakeContinueLlmClient(
+        error: const AppError(
+          AppErrorKind.server,
+          '模型流返回错误：Output data may contain inappropriate content.',
+          detail: '{"error":{"code":"data_inspection_failed"}}',
+        ),
+      );
+      final failEvents = await FallbackService(failClient)
+          .continueGenerate(
+            config: AppConfig(),
+            apiKey: 'sk-test',
+            book: book,
+            history: const <ChapterNode>[],
+            playerAction: '测试行动',
+            existingContent: '已有前文内容。',
+            existingThought: '',
+          )
+          .toList();
+      expect(
+        failEvents.any((e) => e.kind == GenEventKind.interrupted),
+        isTrue,
+      );
+      expect(
+        RuntimeLog.entries().any(
+          (e) =>
+              e.tag == 'Fallback' &&
+              e.message.contains('续写抛出') &&
+              e.message.contains('data_inspection_failed'),
+        ),
+        isTrue,
+      );
+
+      RuntimeLog.clear();
+      final okClient = _FakeContinueLlmClient(
+        chunks: const <LlmChunk>[
+          LlmChunk.content('续写补完的后半段剧情。\n<choices>\n1. 推进\n2. 坚守\n</choices>'),
+        ],
+      );
+      final okEvents = await FallbackService(okClient)
+          .continueGenerate(
+            config: AppConfig(),
+            apiKey: 'sk-test',
+            book: book,
+            history: const <ChapterNode>[],
+            playerAction: '测试行动',
+            existingContent: '已有前文内容。',
+            existingThought: '',
+          )
+          .toList();
+      expect(okEvents.any((e) => e.kind == GenEventKind.done), isTrue);
+      expect(
+        RuntimeLog.entries().any(
+          (e) => e.tag == 'Fallback' && e.message.contains('续写完成'),
+        ),
+        isTrue,
+      );
+    });
+  });
+}
+
+class _FakeContinueLlmClient extends LlmClient {
+  final AppError? error;
+  final List<LlmChunk> chunks;
+
+  _FakeContinueLlmClient({
+    this.error,
+    this.chunks = const <LlmChunk>[],
+  });
+
+  @override
+  Stream<LlmChunk> streamChunks({
+    required AppConfig config,
+    required String apiKey,
+    required List<Map<String, String>> messages,
+    String? workspaceId,
+  }) async* {
+    for (final c in chunks) {
+      yield c;
+    }
+    if (error != null) {
+      throw error!;
+    }
+  }
 }

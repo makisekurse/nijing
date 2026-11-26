@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart'
+    as flutter_l10n;
 import 'package:forui/forui.dart';
 import 'package:provider/provider.dart';
 
@@ -22,6 +25,21 @@ const String kThemeMigratedKey = ConfigProvider.kThemeMigratedKey;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  final previousFlutterOnError = FlutterError.onError;
+  FlutterError.onError = (FlutterErrorDetails details) {
+    final ctx = details.context == null ? '' : ' (${details.context})';
+    RuntimeLog.e('Flutter', '${details.exceptionAsString()}$ctx');
+    if (previousFlutterOnError != null) {
+      previousFlutterOnError(details);
+    } else {
+      FlutterError.presentError(details);
+    }
+  };
+  PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
+    RuntimeLog.e('Platform', '$error');
+    return false;
+  };
 
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
@@ -45,6 +63,27 @@ class HistSimApp extends StatefulWidget {
     required this.initialConfig,
     required this.showOnboarding,
   });
+
+  /// 同时提供 `forui`（`package:material_ui` / `package:cupertino_ui`）与
+  /// `flutter_localizations`（`package:flutter/material.dart` / `cupertino.dart`）双轨本地化委托，
+  /// 彻底杜绝中文等非英文系统下 `SelectionArea` / `TextField` 找不到 `MaterialLocalizations` 导致灰屏崩溃。
+  static const List<LocalizationsDelegate<dynamic>> localizationsDelegates =
+      <LocalizationsDelegate<dynamic>>[
+    ...FLocalizations.localizationsDelegates,
+    flutter_l10n.GlobalMaterialLocalizations.delegate,
+    flutter_l10n.GlobalCupertinoLocalizations.delegate,
+  ];
+
+  /// 取 `FLocalizations` 与 `flutter_localizations` 双边共同支持的语言交集，避免任意设备语言触发缺失委托警告。
+  static final List<Locale> supportedLocales = List<Locale>.unmodifiable(
+    FLocalizations.supportedLocales.where(
+      (Locale locale) =>
+          flutter_l10n.GlobalMaterialLocalizations.delegate
+              .isSupported(locale) &&
+          flutter_l10n.GlobalCupertinoLocalizations.delegate
+              .isSupported(locale),
+    ),
+  );
 
   /// 生产与同构测试共用的根宿主包装（严禁人为套假 Material `Scaffold`）：
   /// - `FTheme` 注入 `forui` 触控与色阶体系；
@@ -78,8 +117,8 @@ class HistSimApp extends StatefulWidget {
       debugShowCheckedModeBanner: false,
       navigatorKey: navigatorKey,
       theme: mTheme,
-      localizationsDelegates: FLocalizations.localizationsDelegates,
-      supportedLocales: FLocalizations.supportedLocales,
+      localizationsDelegates: localizationsDelegates,
+      supportedLocales: supportedLocales,
       builder: (context, child) => buildAppShell(
         context,
         fTheme: fTheme,
